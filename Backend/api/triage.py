@@ -1,59 +1,34 @@
-import json 
-import re 
-from typing import Dict , Any 
+from typing import Literal
+from pydantic import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.messages import SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from Backend.rag.prompt import PROMPT 
 
-with open("red_flags.json" , "r" , encoding="utf-8") as f:
-    RED_FLAGS_DATA = json.load(f)
+# 1. Output Schema
+class QueryRoute(BaseModel):
+    intent: Literal["EMERGENCY", "FACILITY_LOOKUP", "SYMPTOM_ASSESSMENT"] = Field(
+        description="The primary operational path for the patient's query."
+    )
+    is_vague: bool = Field(
+        description="True if the symptom report lacks duration, severity, or specifics needed for safe triage."
+    )
+    reasoning: str = Field(
+        description="A concise 1-sentence medical justification for the routing decision."
+    )
 
-def evaluate_emergency_rules(user_transcript: str)-> Dict[str , Any]:
-    text_lower = user_transcript.lower()
+# 2. Router Setup
+ROUTER_SYSTEM_PROMPT = PROMPT
 
-    # 1. Checking for RED Category rules 
-    for rule in RED_FLAGS_DATA["rules"]:
-        if rule["category"] != "RED":
-            continue
+def route_patient_query(user_query: str) -> QueryRoute:
+    llm =   ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.0)
+    structured_router = llm.with_structured_output(QueryRoute)
+    
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessage(ROUTER_SYSTEM_PROMPT),
+        ("human", "Patient Input: {input}")
+    ])
+    
+    chain = prompt | structured_router
+    return chain.invoke({"input": user_query})
 
-        has_exclusion = any(ex.lower() in text_lower for ex in rule.get("exclusion_keywords", []))
-        if has_exclusion:
-            continue
-
-        for kw in  rule["keywords"]:
-
-            # checking for servere emergency keywords , if they exist bypass the llm part 
-
-            if re.search(rf"\b{re.escape(kw.lower())}\b", text_lower):
-                return {
-                    "is_emergency": True,
-                    "category": "RED",
-                    "matched_rule_id": rule["id"],
-                    "symptom": rule["symptom"],
-                    "action": RED_FLAGS_DATA["triage_categories"]["RED"]["action"],
-                    "recommended_facility": rule["recommended_facility"],
-                    "bypass_llm": True  
-                }             
-
-    # 2. Checking for YELLOW Rules 
-    for rule in RED_FLAGS_DATA["rules"]:
-        if rule["category"] == "YELLOW":
-            for kw in rule["keywords"]:
-                if kw.lower() in text_lower:
-                    return {
-                        "is_emergency": False,
-                        "category": "YELLOW",
-                        "matched_rule_id": rule["id"],
-                        "symptom": rule["symptom"],
-                        "action": RED_FLAGS_DATA["triage_categories"]["YELLOW"]["action"],
-                        "recommended_facility": rule["recommended_facility"],
-                        "bypass_llm": False     # Pass to RAG LLM for detailed guidelines
-                    }
-
-    # 2. Default GREEN Category
-    return {
-        "is_emergency": False,
-        "category": "GREEN",
-        "matched_rule_id": None,
-        "symptom": "Routine Symptoms",
-        "action": RED_FLAGS_DATA["triage_categories"]["GREEN"]["action"],
-        "recommended_facility": "Sub-Centre / ASHA Worker",
-        "bypass_llm": False
-    }
