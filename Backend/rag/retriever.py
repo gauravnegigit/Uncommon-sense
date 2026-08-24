@@ -1,13 +1,16 @@
 
+
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers.ensemble import EnsembleRetriever
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_pinecone import PineconeVectorStore
 from langchain_huggingface import HuggingFaceEmbeddings
-from ingest import chunks
 import os 
+import pickle
 from pinecone import Pinecone , ServerlessSpec
-import os 
+from dotenv import load_dotenv
+
+load_dotenv()
 
 pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
 index_name = "my-pinecone-index"
@@ -17,7 +20,7 @@ embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-
 index = pc.Index(index_name)
 vector_store = PineconeVectorStore(index=index, embedding=embeddings)
 
-def setup_hybrid_retriever(docs):
+def setup_hybrid_retriever():
 
     # Dense vector retriever
     vector_retriever = vector_store.as_retriever(
@@ -28,8 +31,9 @@ def setup_hybrid_retriever(docs):
     )
 
     # Sparse retriever
-    bm25_retriever = BM25Retriever.from_documents(docs)
-    bm25_retriever.k = 5
+    with open("rag/bm25_retriever.pkl" , "rb") as f:
+        bm25_retriever = pickle.load(f)
+    bm25_retriever.k = 4
 
     # Ensemble
     hybrid_retriever = EnsembleRetriever(
@@ -38,5 +42,3 @@ def setup_hybrid_retriever(docs):
         )
 
     return hybrid_retriever
-
-hybrid_retriever = setup_hybrid_retriever(chunks)
