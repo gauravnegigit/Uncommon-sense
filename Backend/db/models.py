@@ -1,10 +1,11 @@
-from pydantic import BaseModel , EmailStr , Field
-from typing import List , Optional
-from datetime import datetime 
+from pydantic import BaseModel, EmailStr, Field
+from typing import List, Optional
+from datetime import datetime
 
 
-# --- Auth Models --- 
-class UserRole: 
+# --- Auth Models ---
+
+class UserRole:
     PATIENT = "PATIENT"
     ASHA_WORKER = "ASHA_WORKER"
     DOCTOR = "DOCTOR"
@@ -26,18 +27,18 @@ class UserDB(BaseModel):
 # --- Geospatial Facility Model ---
 class Location(BaseModel):
     type: str = "Point"
-    coordinates: List[float] 
+    coordinates: List[float]
 
 class HealthFacility(BaseModel):
     name: str
-    facility_type: str 
+    facility_type: str
     location: Location
     specialties: List[str]
     emergency_services: bool
     contact_number: str
     available_beds: int
 
-# Red Flags & Triage Model
+# --- Red Flags & Triage Model ---
 class TriageRecord(BaseModel):
     patient_id: str
     symptoms_text: str
