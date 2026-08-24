@@ -1,9 +1,9 @@
+from rag.prompt import PROMPT
 from typing import Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.messages import SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from Backend.rag.prompt import PROMPT 
 
 # 1. Output Schema
 class QueryRoute(BaseModel):
@@ -31,4 +31,3 @@ def route_patient_query(user_query: str) -> QueryRoute:
     
     chain = prompt | structured_router
     return chain.invoke({"input": user_query})
-
