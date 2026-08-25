@@ -7,7 +7,7 @@ from langchain_pinecone import PineconeVectorStore
 import os
 from langchain_community.embeddings import HuggingFaceEmbeddings
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # load documents 
 loader1 = PyPDFLoader("docs/symptoms.pdf")
@@ -27,15 +27,15 @@ with open("bm25_retriever.pkl" , "wb") as f :
     pickle.dump(retriever , f) 
 
 # saving embeddings in pinecone 
-pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
-index_name = "my-pinecone-index"
-if index_name not in pc.list_indexes().names():
-    print("yes")
-    pc.create_index(
-        name=index_name,
-        dimension=384,  # Matches OpenAI text-embedding-3-small
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-    )
+# pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+# index_name = "my-pinecone-index"
+# if index_name not in pc.list_indexes().names():
+#     print("yes")
+#     pc.create_index(
+#         name=index_name,
+#         dimension=384,  # Matches OpenAI text-embedding-3-small
+#         metric="cosine",
+#         spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+#     )
 
-PineconeVectorStore.from_documents(chunks , embeddings , index_name)
+# PineconeVectorStore.from_documents(chunks , embeddings , index_name)

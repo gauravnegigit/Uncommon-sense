@@ -37,12 +37,18 @@ class HealthFacility(BaseModel):
     contact_number: str
     available_beds: int
 
-# Red Flags & Triage Model
-class TriageRecord(BaseModel):
-    patient_id: str
-    symptoms_text: str
-    detected_red_flags: List[str]
-    is_emergency: bool
-    recommended_facility_type: str
-    summary_text: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class ClinicalSummaryResponse(BaseModel):
+    summary_id: str = Field(..., description="ID of the logged-in user generating the summary")
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # SBAR Structured Format
+    situation: str = Field(..., description="Primary presenting complaint and triage status")
+    background: str = Field(..., description="Timeline of symptoms, relevant context, or reported patient history")
+    assessment: str = Field(..., description="Key clinical findings derived from STWs and rule evaluation")
+    recommendation: str = Field(..., description="Suggested triage level, facility type, and immediate action steps")
+    
+    # Metadata for Handoff UI & Print PDF
+    severity_level: str = Field(..., example="RED")
+    guideline_references: List[str] = Field(default_factory=list, example=["ICMR Paediatric STW - Fever"])
+    target_facility_type: str = Field(..., example="Community Health Centre (CHC)")

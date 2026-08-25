@@ -1,34 +1,50 @@
-from rag.prompt import PROMPT
-from typing import Literal
+from fastapi import APIRouter, Depends, HTTPException, status
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.messages import SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from typing import List, Optional
 
-# 1. Output Schema
-class QueryRoute(BaseModel):
-    intent: Literal["EMERGENCY", "FACILITY_LOOKUP", "SYMPTOM_ASSESSMENT"] = Field(
-        description="The primary operational path for the patient's query."
+from db.models import UserDB
+from db.mongo import get_db
+from .agent import route_patient_query , workflow_controller
+from api.auth import get_current_user, get_current_user_from_cookie
+from core.config import settings
+
+router = APIRouter(prefix="/triage", tags=["Triage & Decision Support"])
+
+class TriageRequest(BaseModel):
+    transcript: str = Field(..., example="I have severe chest pain and cold sweating")
+    latitude: Optional[float] = Field(default=None, example=25.4358)
+    longitude: Optional[float] = Field(default=None, example=81.8463)
+    language: str = Field(default="hi-IN")
+
+class TriageResponse(BaseModel):
+    severity: str = Field(..., description="EMERGENCY , FACILITY_LOOKUP , SYMPTOM_ASSESSMENT")
+    content: str
+
+@router.post("/evaluate", response_model=TriageResponse)
+async def evaluate_triage(
+    payload: TriageRequest,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    # Inject DB or Retriever dependencies if needed
+):
+    transcript = payload.transcript.strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Transcript cannot be empty.")
+
+    response = workflow_controller(transcript , current_user.id)
+
+    return TriageResponse(
+        severity= response["action"],
+        content= response["message"],  
     )
-    is_vague: bool = Field(
-        description="True if the symptom report lacks duration, severity, or specifics needed for safe triage."
-    )
-    reasoning: str = Field(
-        description="A concise 1-sentence medical justification for the routing decision."
-    )
 
-# 2. Router Setup
-ROUTER_SYSTEM_PROMPT = PROMPT
+@router.get("/history")
+async def get_conversation_history(
+    # STRICT AUTH: Rejects guests with 401 Unauthorized automatically
+    current_user: UserDB = Depends(get_current_user_from_cookie), 
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    sessions = await db.triage_sessions.find({"user_id": current_user.id}).to_list(100)
+    return sessions
 
-def route_patient_query(user_query: str) -> QueryRoute:
-    llm =   ChatGoogleGenerativeAI(model="gemini-3.6-flash", temperature=0.0)
-    structured_router = llm.with_structured_output(QueryRoute)
-    
-    prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(ROUTER_SYSTEM_PROMPT),
-        ("human", "Patient Input: {input}")
-    ])
-    
-    chain = prompt | structured_router
-    return chain.invoke({"input": user_query})
-
+ 
