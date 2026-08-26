@@ -51,6 +51,19 @@ const Navbar = () => {
               {isOnline ? <Wifi className="w-3 h-3 text-emerald-300" /> : <WifiOff className="w-3 h-3 text-amber-300" />}
               <span>{isOnline ? 'Online' : `Offline (${pendingCount} queued)`}</span>
             </button>
+
+            {/* Language Selection */}
+            <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded border border-white/20 text-[11px]">
+              <Globe className="w-3 h-3 text-[#BFDCD2]" />
+              <select
+                value={language}
+                onChange={(e) => changeLanguage(e.target.value)}
+                className="bg-transparent text-white font-medium focus:outline-none cursor-pointer"
+              >
+                <option value="en" className="text-slate-900">English</option>
+                <option value="hi" className="text-slate-900">हिंदी (Hindi)</option>
+              </select>
+            </div>
           </div>
         </div>
 

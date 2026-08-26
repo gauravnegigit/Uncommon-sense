@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GraminHealth — Rural Voice AI Triage & Care Referral</title>
+  <title>GraminHealth — Rural Voice & Text AI Triage & Care Referral</title>
   
   <!-- Leaflet CSS & JS for Interactive Map -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -644,6 +644,52 @@
       justify-content: space-between;
     }
 
+    /* DUAL INPUT MODE TOGGLE (VOICE & TEXT) */
+    .input-mode-switcher {
+      display: inline-flex;
+      background: var(--soft-offwhite);
+      border: 1.5px solid var(--light-mint);
+      border-radius: 999px;
+      padding: 4px;
+      gap: 4px;
+      margin-bottom: 20px;
+    }
+    .input-mode-btn {
+      padding: 8px 18px;
+      border-radius: 999px;
+      border: none;
+      background: transparent;
+      color: var(--charcoal);
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .input-mode-btn.active {
+      background: var(--deep-teal);
+      color: var(--pure-white);
+      box-shadow: 0 2px 6px rgba(22, 78, 74, 0.25);
+    }
+    .quick-symptom-chip {
+      background: var(--soft-offwhite);
+      border: 1px solid var(--light-mint);
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--deep-teal);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .quick-symptom-chip:hover {
+      background: var(--light-mint);
+      border-color: var(--primary-teal);
+      transform: translateY(-1px);
+    }
+
     /* MAP MODAL & CONTAINER */
     #leaflet-map {
       height: 440px;
@@ -721,7 +767,7 @@
 </head>
 <body>
 
-  <!-- TOP TICKER (WITHOUT HINDI/ENGLISH LABEL AT TOP RIGHT) -->
+  <!-- TOP TICKER -->
   <div class="top-ticker">
     <div><span class="ticker-pulse"></span><strong>108 Emergency Ambulance Active</strong> • Safety-First Deterministic Triage</div>
     <div id="auth-status-banner"><span>● Status: <strong id="current-user-role-label">Guest (Not Logged In)</strong></span></div>
@@ -797,7 +843,7 @@
           </div>
 
           <div class="stage-pill-rail">
-            <button class="stage-pill active" onclick="jumpToStage(0)">01. Voice Input</button>
+            <button class="stage-pill active" onclick="jumpToStage(0)">01. Voice & Text Input</button>
             <button class="stage-pill" onclick="jumpToStage(1)">02. Safety Triage</button>
             <button class="stage-pill" onclick="jumpToStage(2)">03. Facility Referral</button>
             <button class="stage-pill" onclick="jumpToStage(3)">04. Doctor Summary</button>
@@ -811,25 +857,26 @@
         <div class="story-grid">
           <!-- Left Text Details -->
           <div>
-            <div class="story-eyebrow" id="story-eyebrow">Step 01 • Voice-First Accessibility</div>
-            <h1 class="story-title" id="story-title">Speak Symptoms in Hindi with Full Consent.</h1>
+            <div class="story-eyebrow" id="story-eyebrow">Step 01 • Voice & Text Accessibility</div>
+            <h1 class="story-title" id="story-title">Speak or Type Symptoms in Hindi with Full Consent.</h1>
             <p class="story-body" id="story-body">
-              Rural patients describe fever, discomfort, or symptoms naturally in Hindi. Our audio speech-to-text pipeline extracts structured clinical symptoms while ensuring zero PII storage.
+              Rural patients describe fever, discomfort, or symptoms naturally through voice audio or text typing. Our NLP & NER entity extraction pipeline identifies structured clinical symptoms with zero PII storage.
             </p>
 
             <div class="model-badge">
               <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--primary-teal);"></span>
-              <span id="story-model">AI Model: Hindi Speech-to-Text & Entity Extractor (NER)</span>
+              <span id="story-model">AI Model: Hindi Voice STT + Text NLP Entity Extractor (NER)</span>
             </div>
 
             <div class="tag-list" id="story-tags">
-              <span class="tag-item">✓ Hindi Audio Input</span>
+              <span class="tag-item">✓ Hindi Voice Input</span>
+              <span class="tag-item">✓ Text Input & Presets</span>
               <span class="tag-item">✓ Symptom Extraction</span>
               <span class="tag-item">✓ Patient Consent Active</span>
             </div>
 
             <div class="btn-group">
-              <button class="btn-primary" onclick="handleDashboardEntry()">Open Patient Voice Triage →</button>
+              <button class="btn-primary" onclick="handleDashboardEntry()">Open Patient Voice & Text Triage →</button>
               <button class="btn-secondary" onclick="openMapModal()">🗺️ Live Facility Map</button>
             </div>
           </div>
@@ -931,7 +978,7 @@
         <aside class="chat-sidebar">
           <button class="new-chat-btn" onclick="startNewTriageSession()">
             <span style="font-size:16px;">＋</span>
-            <span>New Voice Triage</span>
+            <span>New Triage Session</span>
           </button>
 
           <div style="font-size:12px;font-weight:800;color:var(--deep-teal);display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding:0 4px;">
@@ -939,94 +986,138 @@
             <span style="font-size:11px;background:var(--light-mint);padding:2px 8px;border-radius:999px;" id="chat-history-count">4</span>
           </div>
 
-          <!-- History Group: TODAY -->
-          <div class="history-section-title">Today</div>
-          <div class="history-item active" id="hist-item-0" onclick="loadHistorySession(0)">
-            <div class="history-item-header">
-              <span class="history-item-title">🔴 Fever & Dry Cough</span>
-              <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Urgent</span>
+          <div id="history-items-container">
+            <!-- History Group: TODAY -->
+            <div class="history-section-title">Today</div>
+            <div class="history-item active" id="hist-item-0" onclick="loadHistorySession(0)">
+              <div class="history-item-header">
+                <span class="history-item-title">🔴 Fever & Dry Cough</span>
+                <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Urgent</span>
+              </div>
+              <div class="history-item-meta">
+                <span>Sonapur PHC</span>
+                <span>10:45 AM</span>
+              </div>
             </div>
-            <div class="history-item-meta">
-              <span>Sonapur PHC</span>
-              <span>10:45 AM</span>
-            </div>
-          </div>
 
-          <!-- History Group: PREVIOUS 7 DAYS -->
-          <div class="history-section-title">Previous 7 Days</div>
-          <div class="history-item" id="hist-item-1" onclick="loadHistorySession(1)">
-            <div class="history-item-header">
-              <span class="history-item-title">🟢 Knee Joint Swelling</span>
-              <span style="background:#dcfce7;color:#166534;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Routine</span>
+            <!-- History Group: PREVIOUS 7 DAYS -->
+            <div class="history-section-title">Previous 7 Days</div>
+            <div class="history-item" id="hist-item-1" onclick="loadHistorySession(1)">
+              <div class="history-item-header">
+                <span class="history-item-title">🟢 Knee Joint Swelling</span>
+                <span style="background:#dcfce7;color:#166534;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Routine</span>
+              </div>
+              <div class="history-item-meta">
+                <span>Haripur Sub-Centre</span>
+                <span>3 days ago</span>
+              </div>
             </div>
-            <div class="history-item-meta">
-              <span>Haripur Sub-Centre</span>
-              <span>3 days ago</span>
-            </div>
-          </div>
 
-          <div class="history-item" id="hist-item-2" onclick="loadHistorySession(2)">
-            <div class="history-item-header">
-              <span class="history-item-title">🟡 Stomach Cramps & Vomiting</span>
-              <span style="background:#dcfce7;color:#166534;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Routine</span>
+            <div class="history-item" id="hist-item-2" onclick="loadHistorySession(2)">
+              <div class="history-item-header">
+                <span class="history-item-title">🟡 Stomach Cramps & Vomiting</span>
+                <span style="background:#dcfce7;color:#166534;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Routine</span>
+              </div>
+              <div class="history-item-meta">
+                <span>Home ORS Fluids</span>
+                <span>5 days ago</span>
+              </div>
             </div>
-            <div class="history-item-meta">
-              <span>Home ORS Fluids</span>
-              <span>5 days ago</span>
-            </div>
-          </div>
 
-          <!-- History Group: LAST MONTH -->
-          <div class="history-section-title">Last Month</div>
-          <div class="history-item" id="hist-item-3" onclick="loadHistorySession(3)">
-            <div class="history-item-header">
-              <span class="history-item-title">🔴 Acute Chest Compression</span>
-              <span style="background:#fee2e2;color:#991b1b;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Emergency</span>
-            </div>
-            <div class="history-item-meta">
-              <span>Rampur CHC (108 SOS)</span>
-              <span>22 July</span>
+            <!-- History Group: LAST MONTH -->
+            <div class="history-section-title">Last Month</div>
+            <div class="history-item" id="hist-item-3" onclick="loadHistorySession(3)">
+              <div class="history-item-header">
+                <span class="history-item-title">🔴 Acute Chest Compression</span>
+                <span style="background:#fee2e2;color:#991b1b;font-size:9px;font-weight:800;padding:1px 6px;border-radius:4px;">Emergency</span>
+              </div>
+              <div class="history-item-meta">
+                <span>Rampur CHC (108 SOS)</span>
+                <span>22 July</span>
+              </div>
             </div>
           </div>
 
         </aside>
 
-        <!-- RIGHT MAIN AREA: ACTIVE VOICE TRIAGE SESSION -->
+        <!-- RIGHT MAIN AREA: ACTIVE VOICE & TEXT TRIAGE SESSION -->
         <section>
           
-          <!-- Hindi Voice Symptom Capture Card -->
-          <div class="clay-card" style="text-align:center;padding:32px;margin-bottom:20px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--light-mint);padding-bottom:12px;margin-bottom:16px;">
+          <!-- Symptom Assessment Card (Voice & Text Dual Input) -->
+          <div class="clay-card" style="padding:32px;margin-bottom:20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--light-mint);padding-bottom:12px;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
               <span id="session-title-tag" style="font-size:12px;font-weight:800;color:var(--primary-teal);">
                 Active Session: Today • High Fever & Cough Triage
               </span>
-              <span style="font-size:11px;font-weight:700;color:var(--charcoal);background:var(--soft-offwhite);padding:3px 10px;border-radius:999px;">
-                Audio Language: Hindi (हिंदी)
+              <span style="font-size:11px;font-weight:700;color:var(--deep-teal);background:var(--soft-offwhite);padding:4px 12px;border-radius:999px;border:1px solid var(--light-mint);">
+                Bilingual: Hindi (हिंदी) / English
               </span>
             </div>
 
-            <h2 style="font-size:22px;font-weight:900;color:var(--deep-teal);margin-bottom:4px;">Hindi Voice Symptom Capture</h2>
-            <p style="font-size:13px;color:var(--charcoal);margin-bottom:20px;">Tap the microphone and describe fever, pain, or duration naturally in Hindi</p>
-
-            <button id="mic-btn" onclick="toggleMic()" style="width:80px;height:80px;border-radius:50%;background:var(--primary-teal);color:#fff;font-size:30px;border:none;cursor:pointer;box-shadow:0 10px 20px rgba(46,139,131,0.25);margin-bottom:14px;transition:all 0.2s;">
-              🎙️
-            </button>
-
-            <div id="mic-status" style="font-weight:700;font-size:13px;color:var(--deep-teal);margin-bottom:20px;">
-              Tap Microphone to Speak (बोलने के लिए दबाएं)
+            <!-- INPUT MODE SWITCHER: VOICE VS TEXT -->
+            <div style="text-align:center;margin-bottom:16px;">
+              <div class="input-mode-switcher">
+                <button class="input-mode-btn active" id="btn-mode-voice" onclick="switchInputMode('voice')">
+                  <span>🎙️ Voice Input (बोलकर)</span>
+                </button>
+                <button class="input-mode-btn" id="btn-mode-text" onclick="switchInputMode('text')">
+                  <span>⌨️ Text Input (लिखकर)</span>
+                </button>
+              </div>
             </div>
 
-            <!-- Voice Transcript Box -->
-            <div style="text-align:left;background:var(--soft-offwhite);padding:16px;border-radius:16px;border:1.5px solid var(--light-mint);margin-bottom:16px;">
-              <strong style="font-size:11px;text-transform:uppercase;color:var(--deep-teal);">Recognized Clinical Voice Input (Hindi):</strong>
-              <p id="voice-transcript-text" style="font-size:13px;color:var(--charcoal);margin-top:6px;font-style:italic;">
-                "मुझे 3 दिनों से लगातार तेज बुखार है और सूखी खांसी आ रही है, गले में भी हल्का दर्द है।"
-              </p>
+            <!-- MODE 1: VOICE INPUT SECTION -->
+            <div id="section-mode-voice" style="text-align:center;">
+              <h2 style="font-size:22px;font-weight:900;color:var(--deep-teal);margin-bottom:4px;">Speak Symptoms in Hindi</h2>
+              <p style="font-size:13px;color:var(--charcoal);margin-bottom:16px;">Tap the microphone and describe fever, pain, or duration naturally</p>
+
+              <button id="mic-btn" onclick="toggleMic()" style="width:80px;height:80px;border-radius:50%;background:var(--primary-teal);color:#fff;font-size:30px;border:none;cursor:pointer;box-shadow:0 10px 20px rgba(46,139,131,0.25);margin-bottom:12px;transition:all 0.2s;">
+                🎙️
+              </button>
+
+              <div id="mic-status" style="font-weight:700;font-size:13px;color:var(--deep-teal);margin-bottom:16px;">
+                Tap Microphone to Speak (बोलने के लिए दबाएं)
+              </div>
+
+              <!-- Voice Transcript Display -->
+              <div style="text-align:left;background:var(--soft-offwhite);padding:16px;border-radius:16px;border:1.5px solid var(--light-mint);margin-bottom:16px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <strong style="font-size:11px;text-transform:uppercase;color:var(--deep-teal);">Recognized Clinical Voice Input (Hindi):</strong>
+                  <button onclick="switchInputMode('text')" style="background:transparent;border:none;color:var(--primary-teal);font-size:11px;font-weight:800;cursor:pointer;">
+                    ✍️ Edit in Text Mode
+                  </button>
+                </div>
+                <p id="voice-transcript-text" style="font-size:13px;color:var(--charcoal);margin-top:6px;font-style:italic;">
+                  "मुझे 3 दिनों से लगातार तेज बुखार है और सूखी खांसी आ रही है, गले में भी हल्का दर्द है।"
+                </p>
+              </div>
             </div>
 
-            <!-- Extracted Symptom Chips -->
+            <!-- MODE 2: TEXT INPUT SECTION -->
+            <div id="section-mode-text" style="display:none;text-align:left;">
+              <h2 style="font-size:22px;font-weight:900;color:var(--deep-teal);margin-bottom:4px;">Type Patient Symptoms</h2>
+              <p style="font-size:13px;color:var(--charcoal);margin-bottom:14px;">Type symptoms in Hindi or English (उदा. मुझे 2 दिन से सिरदर्द और तेज बुखार है / Feeling severe chest pain and breathlessness)</p>
+
+              <textarea id="text-symptom-input" class="input-field" rows="3" style="resize:vertical;font-size:13.5px;line-height:1.5;" placeholder="Type or paste symptoms here in Hindi or English... (लक्षण यहाँ लिखें)" oninput="handleTextInputLive(this.value)">मुझे 3 दिनों से लगातार तेज बुखार है और सूखी खांसी आ रही है, गले में भी हल्का दर्द है।</textarea>
+
+              <!-- Quick Common Symptom Chips -->
+              <div style="margin-bottom:16px;">
+                <span style="font-size:11px;font-weight:800;color:var(--deep-teal);text-transform:uppercase;display:block;margin-bottom:8px;">
+                  Quick One-Click Symptom Presets:
+                </span>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button type="button" class="quick-symptom-chip" onclick="appendQuickSymptom('3 दिन से तेज बुखार (>101°F) और सूखी खांसी')">+ 3 Days High Fever & Cough</button>
+                  <button type="button" class="quick-symptom-chip" onclick="appendQuickSymptom('सीने में बहुत भारी दबाव, सांस लेने में तकलीफ और पसीना')">+ Chest Pain & Shortness of Breath (Emergency)</button>
+                  <button type="button" class="quick-symptom-chip" onclick="appendQuickSymptom('पेट में मरोड़ और 2 बार उल्टी, दस्त')">+ Stomach Cramps & Vomiting</button>
+                  <button type="button" class="quick-symptom-chip" onclick="appendQuickSymptom('दाएं घुटने और जोड़ों में दर्द व सूजन')">+ Knee Joint Pain & Swelling</button>
+                  <button type="button" class="quick-symptom-chip" onclick="appendQuickSymptom('सिर में तेज दर्द और चक्कर आना')">+ Severe Headache & Dizziness</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Extracted Symptom Chips (Common to both modes) -->
             <div style="text-align:left;background:var(--soft-offwhite);padding:16px;border-radius:16px;border:1.5px solid var(--light-mint);margin-bottom:20px;">
-              <strong style="font-size:11px;text-transform:uppercase;color:var(--deep-teal);">Extracted Clinical Entities:</strong>
+              <strong style="font-size:11px;text-transform:uppercase;color:var(--deep-teal);">Extracted Clinical Entities (NER):</strong>
               <div id="extracted-symptoms-box" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
                 <span class="tag-item" style="background:#f0fdf4;border-color:var(--light-mint);color:var(--routine-green);font-weight:700;">✓ High Fever (>101°F)</span>
                 <span class="tag-item" style="background:#f0fdf4;border-color:var(--light-mint);color:var(--routine-green);font-weight:700;">✓ Dry Cough (3 Days)</span>
@@ -1448,7 +1539,7 @@
         <img src="./assets/logo.png" alt="Logo" style="width:36px;height:36px;border-radius:10px;object-fit:cover;" onerror="this.src='./public/assets/logo.png'" />
         <div>
           <strong style="font-size:16px;color:#fff;">GraminHealth</strong>
-          <p style="font-size:11px;color:var(--light-mint);">Voice-First Rural Healthcare Triage & Facility Referral</p>
+          <p style="font-size:11px;color:var(--light-mint);">Voice & Text Rural Healthcare Triage & Facility Referral</p>
         </div>
       </div>
       <div style="font-size:12px;color:var(--light-mint);text-align:right;">
@@ -1462,11 +1553,11 @@
     const STAGES = [
       {
         number: '01',
-        eyebrow: 'Step 01 • Voice-First Accessibility',
-        title: 'Speak Symptoms in Hindi with Full Consent.',
-        body: 'Rural patients describe fever, discomfort, or symptoms naturally in Hindi. Our audio speech-to-text pipeline extracts structured clinical symptoms while ensuring zero PII storage.',
-        model: 'Hindi Speech-to-Text & Clinical Entity Recognition (NER)',
-        tags: ['✓ Hindi Audio Input', '✓ Symptom Extraction', '✓ Patient Consent Active'],
+        eyebrow: 'Step 01 • Voice & Text Accessibility',
+        title: 'Speak or Type Symptoms in Hindi with Full Consent.',
+        body: 'Rural patients describe fever, discomfort, or symptoms naturally through voice audio or text typing. Our NLP & NER entity extraction pipeline identifies structured clinical symptoms with zero PII storage.',
+        model: 'Hindi Voice STT + Text NLP Entity Extractor (NER)',
+        tags: ['✓ Hindi Audio Input', '✓ Text Input & Presets', '✓ Symptom Extraction', '✓ Patient Consent Active'],
         accent: '#2E8B83'
       },
       {
@@ -1498,10 +1589,12 @@
       }
     ];
 
-    // Mock Consultation Sessions for Patient History Sidebar (ChatGPT / Gemini style)
-    const PATIENT_SESSIONS = [
+    // Consultation Sessions for Patient History Sidebar (ChatGPT / Gemini style)
+    let PATIENT_SESSIONS = [
       {
         id: 'sess-0',
+        title: '🔴 Fever & Dry Cough',
+        tag: 'Urgent',
         titleTag: 'Active Session: Today • High Fever & Cough Triage',
         transcript: '"मुझे 3 दिनों से लगातार तेज बुखार है और सूखी खांसी आ रही है, गले में भी हल्का दर्द है।"',
         symptoms: ['✓ High Fever (>101°F)', '✓ Dry Cough (3 Days)', '✓ Throat Discomfort'],
@@ -1514,6 +1607,8 @@
       },
       {
         id: 'sess-1',
+        title: '🟢 Knee Joint Swelling',
+        tag: 'Routine',
         titleTag: 'Consultation • 3 Days Ago: Knee Swelling & Joint Ache',
         transcript: '"पिछले 4-5 दिनों से दाएं घुटने में दर्द और हल्का सूजन है, चलने में भारीपन लगता है।"',
         symptoms: ['✓ Joint Pain (Right Knee)', '✓ Mild Swelling', '✓ Mobility Stiffness'],
@@ -1526,6 +1621,8 @@
       },
       {
         id: 'sess-2',
+        title: '🟡 Stomach Cramps & Vomiting',
+        tag: 'Routine',
         titleTag: 'Consultation • 5 Days Ago: Stomach Cramps & Dehydration',
         transcript: '"पेट में मरोड़ और कल रात दो बार उल्टी हुई थी, कमजोरी महसूस हो रही है।"',
         symptoms: ['✓ Abdominal Cramps', '✓ Vomiting (2 Episodes)', '✓ Mild Dehydration'],
@@ -1538,6 +1635,8 @@
       },
       {
         id: 'sess-3',
+        title: '🔴 Acute Chest Compression',
+        tag: 'Emergency',
         titleTag: 'Emergency Call • 22 July: Chest Compression & Shortness of Breath',
         transcript: '"सीने में बहुत ज्यादा भारीपन और सांस लेने में घबरावत हो रही है, बहुत पसीना आ रहा है।"',
         symptoms: ['🚨 Acute Chest Tightness', '🚨 Dyspnea / Breathlessness', '🚨 Excessive Diaphoresis (Sweating)'],
@@ -1558,6 +1657,9 @@
     let currentUserRole = null; 
     let currentUserName = '';
     let currentUserMeta = '';
+
+    let currentInputMode = 'voice'; // 'voice' or 'text'
+    let activeSessionIndex = 0;
 
     const storySection = document.getElementById('story-section');
     const progressBar = document.getElementById('story-progress-bar');
@@ -1708,9 +1810,8 @@
 
     // Tab Navigation across Home, Patient, Doctor, Clinics, Login, and Signup
     function showTab(tabId) {
-      // Guard: Do not allow direct navigation to dashboard unless logged in
       if (tabId === 'patient' && currentUserRole !== 'patient') {
-        showToast('Please Sign In or Register to access the Patient Voice Dashboard.');
+        showToast('Please Sign In or Register to access the Patient Voice & Text Dashboard.');
         showTab('login');
         return;
       }
@@ -1739,7 +1840,7 @@
       } else if (currentUserRole === 'doctor') {
         showTab('doctor');
       } else {
-        showToast('Please Sign In or Create a Free Account to start Voice Triage.');
+        showToast('Please Sign In or Create a Free Account to start Voice & Text Triage.');
         showTab('login');
       }
     }
@@ -1853,8 +1954,82 @@
       showTab('login');
     }
 
-    // Patient History Sidebar Session Loader (ChatGPT / Gemini style)
+    // DUAL INPUT MODE SWITCHER (VOICE <-> TEXT)
+    function switchInputMode(mode) {
+      currentInputMode = mode;
+      document.getElementById('btn-mode-voice').classList.toggle('active', mode === 'voice');
+      document.getElementById('btn-mode-text').classList.toggle('active', mode === 'text');
+      
+      document.getElementById('section-mode-voice').style.display = mode === 'voice' ? 'block' : 'none';
+      document.getElementById('section-mode-text').style.display = mode === 'text' ? 'block' : 'none';
+
+      // Sync active text
+      if (mode === 'text') {
+        const voiceText = document.getElementById('voice-transcript-text').textContent.replace(/^"|"$/g, '').trim();
+        if (voiceText && voiceText !== 'Listening... Speak your symptoms in Hindi naturally. (बोलना शुरू करें)') {
+          document.getElementById('text-symptom-input').value = voiceText;
+        }
+      }
+    }
+
+    function appendQuickSymptom(snippet) {
+      const txtArea = document.getElementById('text-symptom-input');
+      if (txtArea.value.trim().length === 0) {
+        txtArea.value = snippet;
+      } else {
+        txtArea.value += ', ' + snippet;
+      }
+      handleTextInputLive(txtArea.value);
+    }
+
+    // Real-Time NLP Keyword & Entity Recognition Parser
+    function parseSymptomsFromText(text) {
+      const lower = (text || '').toLowerCase();
+      let extracted = [];
+      let urgency = 'urgent'; // default
+
+      // Emergency red flags
+      if (lower.includes('chest') || lower.includes('सीने') || lower.includes('छाती') || lower.includes('breath') || lower.includes('सांस') || lower.includes('heart') || lower.includes('पसीना')) {
+        extracted.push('🚨 Acute Chest Tightness', '🚨 Dyspnea / Breathlessness', '🚨 Excessive Diaphoresis');
+        urgency = 'emergency';
+      }
+      // Fever & Cough
+      if (lower.includes('fever') || lower.includes('बुखार') || lower.includes('cough') || lower.includes('खांसी') || lower.includes('throat') || lower.includes('गला')) {
+        extracted.push('✓ High Fever (>101°F)', '✓ Dry Cough (3 Days)', '✓ Throat Discomfort');
+        if (urgency !== 'emergency') urgency = 'urgent';
+      }
+      // Stomach / Vomiting
+      if (lower.includes('stomach') || lower.includes('पेट') || lower.includes('vomit') || lower.includes('उल्टी') || lower.includes('loose') || lower.includes('दस्त') || lower.includes('ors')) {
+        extracted.push('✓ Abdominal Cramps', '✓ Vomiting Episodes', '✓ Mild Dehydration Risk');
+        if (urgency !== 'emergency' && urgency !== 'urgent') urgency = 'routine';
+      }
+      // Joint / Knee
+      if (lower.includes('knee') || lower.includes('घुटने') || lower.includes('joint') || lower.includes('जोड़ों') || lower.includes('पैर') || lower.includes('सूजन') || lower.includes('swelling')) {
+        extracted.push('✓ Joint Pain / Arthralgia', '✓ Mild Swelling', '✓ Mobility Stiffness');
+        if (urgency !== 'emergency' && urgency !== 'urgent') urgency = 'routine';
+      }
+      // Headache
+      if (lower.includes('headache') || lower.includes('सिर') || lower.includes('चक्कर') || lower.includes('dizzy')) {
+        extracted.push('✓ Tension Cephalea (Headache)', '✓ Vestibular Dizziness');
+        if (urgency !== 'emergency') urgency = 'urgent';
+      }
+
+      if (extracted.length === 0) {
+        extracted = ['✓ Symptom Pattern Under Review', '✓ Clinical Triage Active'];
+      }
+
+      return { extracted, urgency };
+    }
+
+    function handleTextInputLive(val) {
+      const { extracted } = parseSymptomsFromText(val);
+      const symBox = document.getElementById('extracted-symptoms-box');
+      symBox.innerHTML = extracted.map(s => `<span class="tag-item" style="background:#f0fdf4;border-color:var(--light-mint);color:var(--routine-green);font-weight:700;">${s}</span>`).join('');
+    }
+
+    // Patient History Sidebar Session Loader
     function loadHistorySession(index) {
+      activeSessionIndex = index;
       const sess = PATIENT_SESSIONS[index];
       if (!sess) return;
 
@@ -1865,6 +2040,7 @@
 
       document.getElementById('session-title-tag').textContent = sess.titleTag;
       document.getElementById('voice-transcript-text').textContent = sess.transcript;
+      document.getElementById('text-symptom-input').value = sess.transcript.replace(/^"|"$/g, '');
       
       const symBox = document.getElementById('extracted-symptoms-box');
       symBox.innerHTML = sess.symptoms.map(s => `<span class="tag-item" style="background:#f0fdf4;border-color:var(--light-mint);color:var(--routine-green);font-weight:700;">${s}</span>`).join('');
@@ -1889,7 +2065,8 @@
 
       document.getElementById('session-title-tag').textContent = 'Active Session: New Consultation (Live)';
       document.getElementById('voice-transcript-text').textContent = 'Listening... Speak your symptoms in Hindi naturally. (बोलना शुरू करें)';
-      document.getElementById('extracted-symptoms-box').innerHTML = '<span class="tag-item" style="color:var(--charcoal);">Awaiting voice input...</span>';
+      document.getElementById('text-symptom-input').value = '';
+      document.getElementById('extracted-symptoms-box').innerHTML = '<span class="tag-item" style="color:var(--charcoal);">Awaiting voice or text input...</span>';
       document.getElementById('triage-output').style.display = 'none';
       
       const status = document.getElementById('mic-status');
@@ -1912,13 +2089,59 @@
         btn.style.transform = 'scale(1)';
         btn.classList.remove('mic-pulse');
         status.textContent = 'Voice captured successfully! (सफलतापूर्वक रिकॉर्ड किया गया)';
+        
+        // Auto-extract and populate text
+        const simulatedVoiceText = 'मुझे 3 दिनों से लगातार तेज बुखार है और सूखी खांसी आ रही है, गले में भी हल्का दर्द है।';
+        document.getElementById('voice-transcript-text').textContent = `"${simulatedVoiceText}"`;
+        document.getElementById('text-symptom-input').value = simulatedVoiceText;
+        handleTextInputLive(simulatedVoiceText);
       }
     }
 
     function runTriageSimulation() {
+      const activeText = currentInputMode === 'text' 
+        ? document.getElementById('text-symptom-input').value 
+        : document.getElementById('voice-transcript-text').textContent;
+
+      const { extracted, urgency } = parseSymptomsFromText(activeText);
+
+      // Render Extracted Entities
+      const symBox = document.getElementById('extracted-symptoms-box');
+      symBox.innerHTML = extracted.map(s => `<span class="tag-item" style="background:#f0fdf4;border-color:var(--light-mint);color:var(--routine-green);font-weight:700;">${s}</span>`).join('');
+
+      const badge = document.getElementById('triage-urgency-badge');
+      const tfEl = document.getElementById('triage-timeframe');
+      const facEl = document.getElementById('triage-facility-name');
+      const hindiSummaryEl = document.getElementById('triage-summary-hindi');
+      const engSummaryEl = document.getElementById('triage-summary-english');
+
+      if (urgency === 'emergency') {
+        badge.textContent = '🚨 EMERGENCY (आपातकालीन 108 सहायता)';
+        badge.style.backgroundColor = 'var(--emergency-red)';
+        tfEl.textContent = 'Timeframe: IMMEDIATE (Now)';
+        facEl.textContent = '📍 Rampur Community Health Centre (CHC Emergency Hub) — 7.8 km away';
+        hindiSummaryEl.textContent = 'मरीज को अचानक सीने में तेज दबाव/सांस की तकलीफ। आपातकालीन एम्बुलेंस 108 द्वारा CHC रेफरल।';
+        engSummaryEl.textContent = 'Acute red-flags detected. Immediate referral via 108 Ambulance to Rampur CHC Emergency.';
+      } else if (urgency === 'urgent') {
+        badge.textContent = '⚠️ URGENT (त्वरित देखभाल)';
+        badge.style.backgroundColor = 'var(--urgent-amber)';
+        tfEl.textContent = 'Timeframe: Within 24-48 Hours';
+        facEl.textContent = '📍 Sonapur Primary Health Centre (PHC) — 2.4 km away';
+        hindiSummaryEl.textContent = 'मरीज को 3 दिनों से लगातार तेज बुखार (>101°F) और सूखी खांसी है। PHC में परामर्श की सलाह दी गई है।';
+        engSummaryEl.textContent = 'Patient presents with 3-day history of high fever (>101°F) and dry cough. Recommended same-day OPD evaluation at Sonapur PHC.';
+      } else {
+        badge.textContent = '🟢 ROUTINE (सामान्य प्राथमिक देखभाल)';
+        badge.style.backgroundColor = 'var(--routine-green)';
+        tfEl.textContent = 'Timeframe: Next 3–7 Days / Home Care';
+        facEl.textContent = '📍 Haripur Health & Wellness Sub-Centre — 4.1 km away';
+        hindiSummaryEl.textContent = 'मरीज के लक्षण सामान्य श्रेणी के हैं। उप-स्वास्थ्य केंद्र (Sub-Centre) में बुनियादी परामर्श अथवा घरेलू तरल आहार की सलाह।';
+        engSummaryEl.textContent = 'Patient symptoms are stable. Routine follow-up recommended at Haripur Sub-Centre or local ASHA kiosk.';
+      }
+
       const out = document.getElementById('triage-output');
       out.style.display = 'block';
       out.scrollIntoView({ behavior: 'smooth' });
+      showToast('✓ Clinical entities extracted and triage rating generated!');
     }
 
     function openPrescriptionModal(patientName, complaint) {
