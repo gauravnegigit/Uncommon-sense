@@ -2,7 +2,7 @@ from motor.motor_asyncio import (
     AsyncIOMotorClient,
     AsyncIOMotorDatabase,
 )
-# from core.config import settings
+from core.config import settings
 
 class Mongo:
     client: AsyncIOMotorClient | None = None
@@ -17,7 +17,7 @@ async def connect_to_mongo() -> None:
     verify the connection, and create required indexes.
     """
     mongo.client = AsyncIOMotorClient(
-        "mongodb+srv://test-backend:wojHy6hNCVNUMQ4A@test.v5bmuk8.mongodb.net/",
+        settings.MONGODB_URI,
         serverSelectionTimeoutMS=5000,
     )
     # Verify MongoDB is actually reachable.
