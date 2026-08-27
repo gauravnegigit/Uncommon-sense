@@ -17,7 +17,7 @@ async def connect_to_mongo() -> None:
     verify the connection, and create required indexes.
     """
     mongo.client = AsyncIOMotorClient(
-        settings.MONGODB_URI,
+        settings.MONGO_URI,
         serverSelectionTimeoutMS=5000,
     )
     # Verify MongoDB is actually reachable.
