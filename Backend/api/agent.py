@@ -38,14 +38,26 @@ class Assessment(BaseModel):
         description="A follow-up question to clarify vague symptom reports."
     )
 
-# --- 2. History Retriever Helper ---
-def get_session_history(session_id: str) -> MongoDBChatMessageHistory:
+# --- 2. History Helper functions ---
+
+def format_session_id(user_id: str, chat_id: str) -> str:
+    """Creates a predictable composite session ID."""
+    return f"{user_id}:{chat_id}"
+
+def get_session_history(user_id: str, chat_id: str) -> MongoDBChatMessageHistory:
+    session_id = format_session_id(user_id, chat_id)
     return MongoDBChatMessageHistory(
         connection_string=MONGO_URI,
         session_id=session_id,
         database_name=DB_NAME,
         collection_name=COLLECTION_NAME
     )
+
+def delete_session_history(user_id: str, chat_id: str) -> bool:
+    """Clears all chat history for a given session/user ID."""
+    history = get_session_history(user_id, chat_id)
+    history.clear()
+    return True
 
 # --- 3. Context-Aware Pipeline Functions ---
 
@@ -103,9 +115,9 @@ def handle_symptom_path(user_query: str, chat_history: list, hybrid_retriever , 
 
 # --- 4. Main Workflow Controller ---
 
-def workflow_controller(user_query: str, session_id: str):
+def workflow_controller(user_query: str, user_id: str , chat_id: str):
     # 1. Fetch History from MongoDB
-    history_db = get_session_history(session_id)
+    history_db = get_session_history(user_id , chat_id)
     chat_history = history_db.messages  # Converts DB records into LangChain Message objects
 
     # 2. Route Query with History Context
@@ -123,6 +135,12 @@ def workflow_controller(user_query: str, session_id: str):
     # 3. Append latest turn to MongoDB for future requests
     history_db.add_user_message(user_query)
     history_db.add_ai_message(response_content)
+
+    return {
+        "action": decision.intent,
+        "message": response_content 
+    }
+
 
     return {
         "action": decision.intent,
