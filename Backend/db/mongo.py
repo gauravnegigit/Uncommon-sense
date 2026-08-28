@@ -84,20 +84,14 @@ async def _ensure_indexes() -> None:
         "facility_type"
     )
     # Triage sessions
-    await db.triage_sessions.create_index(
-        [
-            (
-                "user_id",
-                1,
-            ),
-            (
-                "created_at",
-                -1,
-            ),
-        ]
-    )
+    await db["chat_histories"].create_index([("SessionId", 1)])
+
     # Patient summaries
-    await db.patient_summaries.create_index(
-        "triage_session_id",
-        unique=True,
+    await db["clinical_summaries"].create_index(
+        [("user_id", 1), ("summary_id", 1)],
+        unique=True
     )
+
+    # for unverified sign ups 
+    await db.pending_signups.create_index("expires_at", expireAfterSeconds=0)
+    await db.pending_signups.create_index("contact", unique=True)
