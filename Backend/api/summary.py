@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Optional
-import uuid
+from typing import List
 from datetime import datetime
-from api.triage import get_conversation_history
+from .agent import get_session_history
 from api.auth import get_current_user_from_cookie
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import get_buffer_string
 from langchain_core.prompts import ChatPromptTemplate
 from db.models import ClinicalSummaryResponse
 from db.mongo import get_db
@@ -34,8 +34,6 @@ YOUR PRIMARY RESPONSIBILITIES:
 
 ### INPUT DATA AVAILABLE TO YOU:
 - Conversation History: Previous messages between the patient and the assistant.
-{full_text}
-
 ---
 
 ### CLASSIFICATION & ROUTING RULES:
@@ -64,6 +62,7 @@ target_facility_type: Must specify the recommended facility type for patient ref
 
 @router.get("/generate", response_model=ClinicalSummaryResponse)
 async def generate_patient_summary(
+    chat_id: str ,
     current_user: UserDB = Depends(get_current_user_from_cookie), 
     db = Depends(get_db)):
     """
@@ -72,14 +71,20 @@ async def generate_patient_summary(
     """  
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SUMMARY_PROMPT.format(full_text = get_conversation_history(current_user.id, db))),
+        ("system", SUMMARY_PROMPT),
+        ("user", "Conversation History:{history}"),  
     ])
 
     llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0).with_structured_output(Summary)
     chain = prompt | llm
-    chain_response = chain.invoke()
+    raw_messages = get_session_history(str(current_user.id) , chat_id).messages
+    formatted_history = get_buffer_string(raw_messages)
+    chain_response = chain.invoke({"history":formatted_history})
 
     summary = {
+        "summary_id": chat_id,
+        "user_id": current_user.id,
+        "updated_at": datetime.utcnow() , 
         "situation": chain_response.situation,
         "background": chain_response.background,
         "assessment": chain_response.assessment,
@@ -89,22 +94,16 @@ async def generate_patient_summary(
         "target_facility_type": chain_response.target_facility_type
     }
 
-    await db.clinical_summaries.insert_one({
-        "summary_id": str(uuid.uuid4()),
-        "user_id": current_user.id,
-        "generated_at": datetime.utcnow(),
-        **summary
-    })
+    await db["clinical_summaries"].replace_one(
+        filter={
+            "user_id": current_user.id, 
+            "summary_id": chat_id
+        },
+        replacement=summary,
+        upsert=True
+    )
 
     # Structured response matching SBAR framework
     return ClinicalSummaryResponse(
-        summary_id=current_user.id,
-        generated_at=datetime.utcnow(),
-        situation= chain_response.situation,
-        background= chain_response.background,
-        assessment= chain_response.assessment,
-        recommendation= chain_response.recommendation,
-        severity_level= chain_response.severity_level,
-        guideline_references= chain_response.guideline_references,
-        target_facility_type= chain_response.target_facility_type
+        **summary
     )
