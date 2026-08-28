@@ -19,9 +19,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # SARVAM API KEY 
+    SARVAM_API_KEY: str = os.environ.get("SARVAM_API_KEY")
+
+    #SMTP SERVER EMAIL
+    SMTP_SERVER_EMAIL: str = os.environ.get("SMTP_SERVER_EMAIL")
+
     # CORS
     CORS_ORIGINS: list[str] = [
-        "http://localhost:3000/"
+        "http://localhost:5173/",
+        "http://127.0.0.1:5173/",
     ]
     model_config = SettingsConfigDict(
         env_file=".env",
