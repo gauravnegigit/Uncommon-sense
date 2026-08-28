@@ -6,8 +6,6 @@ from datetime import datetime
 # --- Auth Models --- 
 class UserRole: 
     PATIENT = "PATIENT"
-    ASHA_WORKER = "ASHA_WORKER"
-    DOCTOR = "DOCTOR"
 
 class UserCreate(BaseModel):
     name: str
@@ -18,8 +16,13 @@ class UserCreate(BaseModel):
 class UserDB(BaseModel):
     id: Optional[str] = Field(None, alias="_id")
     name: str
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
     hashed_password: str
+    address: Optional[str] = None
+    pincode: Optional[str] = None
+    is_email_verified: bool = False
+    is_phone_verified: bool = False
     role: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -40,7 +43,7 @@ class HealthFacility(BaseModel):
 
 class ClinicalSummaryResponse(BaseModel):
     summary_id: str = Field(..., description="ID of the logged-in user generating the summary")
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
     
     # SBAR Structured Format
     situation: str = Field(..., description="Primary presenting complaint and triage status")
