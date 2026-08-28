@@ -6,6 +6,13 @@ from jose import JWTError, jwt
 
 from core.config import settings
 
+# contacts and otp related imports
+import os
+from aiosmtplib import send
+from email.message import EmailMessage
+from twilio.rest import Client
+import re 
+import secrets 
 
 # ============================================================================
 # PASSWORD HASHING
@@ -51,6 +58,39 @@ def verify_password(
     ):
         return False
 
+# ============================================================================
+# SMTP email
+# ============================================================================
+
+# Send Email via Async SMTP (e.g., Gmail SMTP or SendGrid SMTP)
+async def send_email_otp(email: str, otp: str):
+    msg = EmailMessage()
+    msg["From"] = settings.SMTP_SERVER_EMAIL
+    msg["To"] = email
+    msg["Subject"] = "Your Password Reset OTP"
+    msg.set_content(f"Your password reset OTP is: {otp}. It expires in 10 minutes.")
+
+    await send(
+        msg,
+        hostname=os.getenv("SMTP_HOST", "smtp.gmail.com"),
+        port=587,
+        start_tls=True,
+        username=settings.SMTP_SERVER_EMAIL,
+        password="ship ckav qygt nrba",
+    )
+
+# Send SMS via Twilio
+def send_sms_otp(phone_number: str, otp: str):
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    twilio_number = os.getenv("TWILIO_PHONE_NUMBER")
+
+    client = Client(account_sid, auth_token)
+    client.messages.create(
+        body=f"Your password reset OTP is: {otp}. Valid for 10 minutes.",
+        from_=twilio_number,
+        to=phone_number
+    )
 
 # ============================================================================
 # JWT
@@ -159,3 +199,32 @@ def decode_token(
 
     except JWTError:
         return None
+
+def set_cookies(response , access_token , refresh_token):
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        secure=settings.ENV != "development",  
+        samesite="lax",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        secure=settings.ENV != "development",
+        samesite="lax",
+    )
+
+def is_email(contact: str) -> bool:
+    email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    return bool(re.match(email_regex, contact))
+
+def is_phone(contact: str) -> bool :
+    phone_regex = r"^\+[1-9]\d{1,14}$"
+    return bool(re.match(phone_regex, contact))
+
+def generate_otp() -> str:
+    return "".join([secrets.choice("0123456789") for _ in range(6)])
