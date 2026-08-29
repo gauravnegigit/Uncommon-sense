@@ -107,8 +107,10 @@ async def evaluate_audio_file(
         sarvam_data = response.json()
         transcript = sarvam_data.get("transcript", "")
 
-        composite_session_id = f"{current_user.id}:{chat_id}"
-        response = workflow_controller(transcript , composite_session_id)
+        if not transcript.strip():
+            raise HTTPException(status_code=400, detail="No speech could be recognized in the audio recording.")
+
+        response = workflow_controller(transcript , current_user.id , chat_id)
 
         return TriageResponse(
             severity= response["action"],
@@ -119,7 +121,10 @@ async def evaluate_audio_file(
         # Cleanup temporary audio files
         for path in [raw_path, wav_path]:
             if path and os.path.exists(path):
-                os.remove(path)
+                try :
+                    os.remove(path)
+                except Exception as e :
+                    pass 
 
 @router.get("/chat/{chat_id}/history")
 async def get_chat_history(

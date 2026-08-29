@@ -87,7 +87,7 @@ def send_sms_otp(phone_number: str, otp: str):
 
     client = Client(account_sid, auth_token)
     client.messages.create(
-        body=f"Your password reset OTP is: {otp}. Valid for 10 minutes.",
+        body=f"Your verification code is {otp}. Do not share this code.",
         from_=twilio_number,
         to=phone_number
     )

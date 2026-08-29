@@ -94,4 +94,4 @@ async def _ensure_indexes() -> None:
 
     # for unverified sign ups 
     await db.pending_signups.create_index("expires_at", expireAfterSeconds=0)
-    await db.pending_signups.create_index("contact", unique=True)
+    await db.pending_signups.create_index("pending_key", unique=True)

@@ -1,452 +1,708 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Send, 
-  RotateCcw, 
-  Volume2, 
-  VolumeX, 
-  AlertOctagon, 
-  FileText, 
-  MapPin, 
-  Sparkles, 
-  CheckCircle, 
-  User, 
-  Activity,
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Send,
+  Plus,
+  Trash2,
+  Edit2,
+  Check,
+  X,
+  Volume2,
   PhoneCall,
-  Loader2,
-  Bot
+  FileText,
+  MapPin,
+  Sparkles,
+  Bookmark,
+  MessageSquare,
+  AlertTriangle,
 } from 'lucide-react';
-import { useLanguage } from '../../context/LanguageContext';
+import { TriageMessage, ChatSession, TriageSeverity } from '../../types';
+import { triageService } from '../../services/triageService';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { scanDangerSigns, PRESET_SCENARIOS } from '../../config/constants';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
-import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '../../hooks/useSpeechSynthesis';
-import { TriageMessage, TriageSeverity, PresetScenario } from '../../types';
-import * as triageService from '../../services/triageService';
 import { VoiceInterface } from './VoiceInterface';
-import { PresetScenarios } from './PresetScenarios';
-import { DangerSignsCard } from './DangerSignsCard';
 import { TriageResultBadge } from './TriageResultBadge';
 
 interface TriageConsoleProps {
-  onOpenDoctorSummary: () => void;
-  onViewFacilities: () => void;
-  onDangerSignsDetected: (signs: string[]) => void;
-  currentDangerSigns: string[];
-  messages: TriageMessage[];
-  setMessages: React.Dispatch<React.SetStateAction<TriageMessage[]>>;
   chatId: string;
   setChatId: (id: string) => void;
+  messages: TriageMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<TriageMessage[]>>;
+  dangerSigns: string[];
+  setDangerSigns: React.Dispatch<React.SetStateAction<string[]>>;
+  onOpenDoctorModal: () => void;
+  onOpenFacilities: () => void;
 }
 
 export const TriageConsole: React.FC<TriageConsoleProps> = ({
-  onOpenDoctorSummary,
-  onViewFacilities,
-  onDangerSignsDetected,
-  currentDangerSigns,
-  messages,
-  setMessages,
   chatId,
   setChatId,
+  messages,
+  setMessages,
+  dangerSigns,
+  setDangerSigns,
+  onOpenDoctorModal,
+  onOpenFacilities,
 }) => {
-  const { t, isHindi, language } = useLanguage();
-  const { user } = useAuth();
+  const { user, isAuthenticated, setIsAuthModalOpen } = useAuth();
+  const { t, isHindi } = useLanguage();
+
+  // Voice & Speech Hooks
+  const {
+    isRecording,
+    recordingDuration,
+    startRecording,
+    stopRecording,
+    clearAudio,
+  } = useVoiceRecorder();
+  const { speak, stop: stopSpeech, isPlaying: isPlayingAudio } = useSpeechSynthesis();
+
+  // Input & loading states
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Chat sessions list
+  const [savedSessions, setSavedSessions] = useState<ChatSession[]>(() => {
+    const local = localStorage.getItem('gramin_saved_chats');
+    if (local) {
+      try {
+        return JSON.parse(local);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [
+      {
+        id: 'default_chat',
+        title: isHindi ? 'प्राथमिक स्वास्थ्य परामर्श' : 'Initial Health Consultation',
+        date: 'Today',
+        messages: [],
+      },
+    ];
+  });
+
+  // Rename Chat inline state
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editingChatTitle, setEditingChatTitle] = useState('');
+
+  // Save chat name modal/prompt state
+  const [isNamingChat, setIsNamingChat] = useState(false);
+  const [customChatName, setCustomChatName] = useState('');
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Audio recording & Speech hooks
-  const voiceRecorder = useVoiceRecorder();
-  const speechRecognition = useSpeechRecognition({
-    language: isHindi ? 'hi-IN' : 'en-IN',
-    onResult: (transcript) => {
-      setInputText(transcript);
-    },
-  });
-  const speechSynthesis = useSpeechSynthesis();
-
-  // Scroll to bottom when messages update
-  useEffect(() => {
+  // Auto-scroll messages to bottom
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
-
-  // Start new chat session
-  const handleNewChat = async () => {
-    speechSynthesis.stop();
-    const newId = await triageService.startNewChat();
-    setChatId(newId);
-    setMessages([
-      {
-        id: 'msg_welcome',
-        sender: 'assistant',
-        content: isHindi
-          ? 'नमस्ते! मैं ग्रामीण हेल्थ (Gramin Health) ट्राइएज सहायक हूँ। कृपया मरीज के लक्षण बताएं या नीचे दिए गए माइक बटन को दबाकर हिंदी में बोलें।'
-          : 'Hello! I am your Gramin Health Triage & Referral Assistant. Please describe patient symptoms or speak using the microphone.',
-        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-        severity: 'UNKNOWN',
-      },
-    ]);
-    onDangerSignsDetected([]);
   };
 
-  // Submit text triage
-  const handleSendMessage = async (textToSend?: string) => {
-    const text = (textToSend || inputText).trim();
-    if (!text || isLoading) return;
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isLoading]);
 
-    speechSynthesis.stop();
+  // Sync saved sessions to localStorage
+  useEffect(() => {
+    localStorage.setItem('gramin_saved_chats', JSON.stringify(savedSessions));
+  }, [savedSessions]);
+
+  // 1. Initial Triage Load: Must create new chat when user goes to triage for the first time
+  const initializeNewChat = useCallback(async () => {
+    stopSpeech();
+    let newId = 'chat_' + Math.random().toString(36).substring(2, 11);
+
+    try {
+      if (isAuthenticated) {
+        const res = await triageService.startNewChat();
+        if (res && res.chat_id) {
+          newId = res.chat_id;
+        }
+      }
+    } catch (err) {
+      console.warn('Backend new chat initialization note:', err);
+    }
+
+    const defaultTitle = isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation';
+    const welcomeMsg: TriageMessage = {
+      id: 'welcome_' + Date.now(),
+      sender: 'assistant',
+      content: isHindi
+        ? 'नमस्ते! मैं ग्रामीण हेल्थ (Gramin Health) ट्राइएज सहायक हूँ। कृपया मरीज के लक्षण बताएं या नीचे दिए गए माइक बटन को दबाकर हिंदी में बोलें।'
+        : 'Hello! I am your Gramin Health Triage & Referral Assistant. Please describe patient symptoms or speak using the microphone.',
+      timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      severity: 'UNKNOWN',
+    };
+
+    setChatId(newId);
+    setDangerSigns([]);
+    setMessages([welcomeMsg]);
+    setErrorMessage(null);
+
+    setSavedSessions((prev) => {
+      const exists = prev.some((s) => s.id === newId);
+      if (exists) return prev;
+      return [{ id: newId, title: defaultTitle, date: isHindi ? 'आज' : 'Today', messages: [welcomeMsg] }, ...prev];
+    });
+  }, [isAuthenticated, isHindi, setChatId, setDangerSigns, setMessages, stopSpeech]);
+
+  // Initialize on first mount if chatId is not in saved sessions
+  useEffect(() => {
+    if (!chatId || chatId === 'default_chat' || !savedSessions.some((s) => s.id === chatId)) {
+      initializeNewChat();
+    }
+  }, []);
+
+  // 2. Save Chat with Specific Name
+  const handleSaveChatTitle = (targetId: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+
+    setSavedSessions((prev) =>
+      prev.map((s) => (s.id === targetId ? { ...s, title: trimmed } : s))
+    );
+    setEditingChatId(null);
+    setIsNamingChat(false);
+  };
+
+  // 3. Switch Chat Session
+  const handleSelectSession = (sess: ChatSession) => {
+    stopSpeech();
+    setChatId(sess.id);
+    setMessages(
+      sess.messages.length > 0
+        ? sess.messages
+        : [
+            {
+              id: 'welcome_' + Date.now(),
+              sender: 'assistant',
+              content: isHindi
+                ? 'नमस्ते! कृपया मरीज के लक्षण बताएं या माइक से बोलें।'
+                : 'Hello! Please describe patient symptoms or speak using the microphone.',
+              timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+              severity: 'UNKNOWN',
+            },
+          ]
+    );
+    setErrorMessage(null);
+  };
+
+  // 4. Delete Chat Session
+  const handleDeleteSession = async (targetId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (isAuthenticated) {
+        await triageService.deleteChat(targetId);
+      }
+    } catch (err) {
+      console.warn('Backend delete chat note:', err);
+    }
+
+    setSavedSessions((prev) => {
+      const filtered = prev.filter((s) => s.id !== targetId);
+      if (filtered.length === 0) {
+        setTimeout(() => initializeNewChat(), 100);
+      } else if (chatId === targetId) {
+        handleSelectSession(filtered[0]);
+      }
+      return filtered;
+    });
+  };
+
+  // 5. Send Text Question -> /api/triage/evaluate
+  const handleSendText = async (textOverride?: string) => {
+    const query = (textOverride || inputText).trim();
+    if (!query || isLoading) return;
+
+    stopSpeech();
     setInputText('');
-    speechRecognition.resetTranscript();
+    setErrorMessage(null);
 
-    // Check danger signs locally in real-time
-    const newSigns = triageService.scanForDangerSigns(text);
-    const combinedSigns = Array.from(new Set([...currentDangerSigns, ...newSigns]));
-    onDangerSignsDetected(combinedSigns);
+    // Client-side danger sign scanning for immediate safety alert
+    const detected = scanDangerSigns(query);
+    if (detected.length > 0) {
+      setDangerSigns((prev) => Array.from(new Set([...prev, ...detected])));
+    }
 
-    // Append user message
     const userMsg: TriageMessage = {
       id: 'usr_' + Date.now(),
       sender: 'user',
-      content: text,
+      content: query,
       timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      dangerSignsDetected: newSigns,
+      dangerSignsDetected: detected,
     };
-    setMessages((prev) => [...prev, userMsg]);
+
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setIsLoading(true);
 
     try {
       const response = await triageService.evaluateText({
-        transcript: text,
+        transcript: query,
         chat_id: chatId,
         language: isHindi ? 'hi-IN' : 'en-IN',
       });
 
-      const assistantMsg: TriageMessage = {
+      const astSeverity = response.severity as TriageSeverity;
+      const astMsg: TriageMessage = {
         id: 'ast_' + Date.now(),
         sender: 'assistant',
         content: response.content,
         timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-        severity: response.severity,
+        severity: astSeverity,
       };
 
-      setMessages((prev) => [...prev, assistantMsg]);
+      const finalMessages = [...newMessages, astMsg];
+      setMessages(finalMessages);
 
-      // Automatically speak the response if RED emergency or requested
-      if (response.severity === 'EMERGENCY') {
-        speechSynthesis.speak(
+      // Auto update saved sessions
+      setSavedSessions((prev) => {
+        const titleSnippet = query.slice(0, 32) + (query.length > 32 ? '...' : '');
+        return prev.map((s) => {
+          if (s.id === chatId) {
+            return {
+              ...s,
+              title: s.title === (isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation') ? titleSnippet : s.title,
+              messages: finalMessages,
+            };
+          }
+          return s;
+        });
+      });
+
+      // Audio alerts for emergency
+      if (astSeverity === 'EMERGENCY') {
+        speak(
           isHindi
-            ? 'सावधान! आपातकालीन रेड-फ्लैग संकेत मिले हैं। कृपया तुरंत 108 एम्बुलेंस बुलाएं।'
+            ? 'सावधान! आपातकालीन खतरे के संकेत मिले हैं। कृपया तुरंत 108 एम्बुलेंस बुलाएं।'
             : 'Alert! Emergency danger signs detected. Please call 108 immediately.',
-          isHindi ? 'hi-IN' : 'en-IN'
+          isHindi ? 'hi' : 'en'
         );
       }
-    } catch (error) {
-      console.error('Triage failed:', error);
+    } catch (err: any) {
+      console.error('Triage Evaluate Error:', err);
+      // Fallback response with helpful error message
+      const isAuthErr = err.message?.includes('token') || err.message?.includes('401') || err.message?.includes('cookie');
+      const fallbackContent = isAuthErr
+        ? isHindi
+          ? '🔒 AI ट्राइएज व सत्र सहेजने के लिए कृपया ऊपर लॉगिन या साइन अप करें। (Login required for full AI triage).'
+          : '🔒 Please sign in or register above to connect with the full AI clinical triage engine and save history.'
+        : isHindi
+        ? `⚠️ सर्वर से कनेक्ट करने में त्रुटि: ${err.message}`
+        : `⚠️ Server connection error: ${err.message}`;
+
+      const fallbackMsg: TriageMessage = {
+        id: 'ast_err_' + Date.now(),
+        sender: 'assistant',
+        content: fallbackContent,
+        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        severity: detected.length > 0 ? 'EMERGENCY' : 'UNKNOWN',
+      };
+
+      setMessages([...newMessages, fallbackMsg]);
+      if (isAuthErr) {
+        setIsAuthModalOpen(true);
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Start Voice Recording (Dual: Web Audio WAV recorder + Live Speech Recognition)
-  const handleStartVoice = async () => {
-    speechSynthesis.stop();
-    setInputText('');
-    speechRecognition.startListening();
-    await voiceRecorder.startRecording();
-  };
+  // 6. Voice Input -> Audio Blob -> /api/triage/evaluate-audio-file
+  const handleStopAndUploadVoice = async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
 
-  // Stop Voice Recording & Send
-  const handleStopVoice = async () => {
-    speechRecognition.stopListening();
-    const blob = await voiceRecorder.stopRecording();
-
-    // Use transcribed speech or upload audio blob to backend
-    const transcribed = speechRecognition.transcript.trim();
-
-    if (transcribed) {
-      handleSendMessage(transcribed);
-    } else if (blob) {
-      setIsLoading(true);
-      try {
-        const res = await triageService.evaluateAudioFile(blob, chatId);
-        const userMsg: TriageMessage = {
-          id: 'usr_audio_' + Date.now(),
-          sender: 'user',
-          content: res.transcript || (isHindi ? 'ऑडियो संदेश (हिंदी रिकॉर्डिंग)' : 'Audio Message (Hindi recording)'),
-          timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          isAudio: true,
-        };
-
-        const astMsg: TriageMessage = {
-          id: 'ast_audio_' + Date.now(),
-          sender: 'assistant',
-          content: res.content,
-          timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-          severity: res.severity,
-        };
-
-        setMessages((prev) => [...prev, userMsg, astMsg]);
-      } catch (err) {
-        console.warn('Audio upload fallback to text simulation:', err);
-        // Fallback default Hindi voice scenario simulation
-        handleSendMessage('मुझे 2 दिन से बहुत तेज सीने में दर्द और सांस लेने में तकलीफ़ हो रही है।');
-      } finally {
+    try {
+      const audioBlob = await stopRecording();
+      if (!audioBlob || audioBlob.size === 0) {
         setIsLoading(false);
+        return;
       }
+
+      const userMsg: TriageMessage = {
+        id: 'usr_voice_' + Date.now(),
+        sender: 'user',
+        content: isHindi ? '🎙️ [हिंदी वॉयस रिकॉर्डिंग भेजी गई]' : '🎙️ [Voice recording sent for transcription]',
+        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        audioBlob,
+      };
+
+      const newMessages = [...messages, userMsg];
+      setMessages(newMessages);
+
+      const response = await triageService.evaluateAudioFile(audioBlob, chatId);
+
+      const astSeverity = response.severity as TriageSeverity;
+      const astMsg: TriageMessage = {
+        id: 'ast_voice_' + Date.now(),
+        sender: 'assistant',
+        content: response.content,
+        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        severity: astSeverity,
+      };
+
+      const finalMessages = [...newMessages, astMsg];
+      setMessages(finalMessages);
+
+      setSavedSessions((prev) =>
+        prev.map((s) => (s.id === chatId ? { ...s, messages: finalMessages } : s))
+      );
+
+      if (astSeverity === 'EMERGENCY') {
+        speak(
+          isHindi
+            ? 'सावधान! आपातकालीन खतरे के संकेत मिले हैं। कृपया 108 एम्बुलेंस को कॉल करें।'
+            : 'Alert! Emergency danger signs detected.',
+          isHindi ? 'hi' : 'en'
+        );
+      }
+    } catch (err: any) {
+      console.error('Audio triage error:', err);
+      const isAuthErr = err.message?.includes('token') || err.message?.includes('cookie');
+      const errAstMsg: TriageMessage = {
+        id: 'ast_err_' + Date.now(),
+        sender: 'assistant',
+        content: isAuthErr
+          ? isHindi
+            ? '🔒 वॉयस ट्राइएज हेतु कृपया लॉगिन करें। (Please sign in for voice triage).'
+            : '🔒 Please sign in to use Sarvam AI speech-to-text voice triage.'
+          : isHindi
+          ? `⚠️ ऑडियो ट्राइएज में त्रुटि: ${err.message}`
+          : `⚠️ Speech recognition error: ${err.message}`,
+        timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        severity: 'UNKNOWN',
+      };
+      setMessages((prev) => [...prev, errAstMsg]);
+    } finally {
+      clearAudio();
+      setIsLoading(false);
     }
   };
 
-  // Run a preset scenario
-  const handleSelectScenario = (scenario: PresetScenario) => {
-    const query = isHindi ? scenario.promptHi : scenario.promptEn;
-    handleSendMessage(query);
-  };
+  const activeChat = savedSessions.find((s) => s.id === chatId);
 
   return (
-    <div className="space-y-6">
-      {/* Top Controls: Preset Scenarios & Danger Signs Monitor */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2">
-          <PresetScenarios onSelectScenario={handleSelectScenario} />
-        </div>
-        <div className="lg:col-span-1">
-          <DangerSignsCard detectedSigns={currentDangerSigns} />
-        </div>
-      </div>
-
-      {/* Main Conversation Box */}
-      <div className="bg-white rounded-3xl border border-slate-200 shadow-md flex flex-col h-[640px] overflow-hidden">
-        {/* Chat Header with Logo */}
-        <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 text-white px-5 py-4 flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-3">
-            <div className="relative w-10 h-10 rounded-xl bg-slate-900 p-1 flex items-center justify-center border border-slate-800 shadow-xs shrink-0">
-              <img src="/logo.png" alt="Gramin Health" className="w-full h-full object-contain" />
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 absolute top-0.5 right-0.5 animate-ping"></span>
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-extrabold text-white">
-                  Gramin Health Triage Console
-                </h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">
-                  {isHindi ? 'सत्र' : 'Session'}: {chatId.slice(0, 8)}...
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 font-hindi">
-                {isHindi ? 'आईसीएमआर एवं आशा आपातकालीन प्रोटोकॉल' : 'ICMR STWs & ASHA Guidelines Engine'}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleNewChat}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-colors"
-              title={t('newChat')}
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>{t('newChat')}</span>
-            </button>
-          </div>
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* LEFT CHAT SESSIONS SIDEBAR */}
+      <div className="lg:col-span-3 bg-white rounded-3xl border border-slate-200/80 p-4 shadow-sm flex flex-col h-[600px]">
+        <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+          <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+            <MessageSquare className="w-4 h-4 text-emerald-600" />
+            <span>{t('chatHistory')}</span>
+          </span>
+          <button
+            onClick={initializeNewChat}
+            className="px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold shadow-xs flex items-center gap-1 transition-all"
+            title="Start New Chat"
+          >
+            <Plus className="w-3 h-3" />
+            <span>{isHindi ? 'नया' : 'New'}</span>
+          </button>
         </div>
 
-        {/* Message Stream */}
-        <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4 bg-slate-50/50">
-          {messages.map((msg) => {
-            const isUser = msg.sender === 'user';
-            const isEmergency = msg.severity === 'EMERGENCY';
+        {/* Chat List */}
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+          {savedSessions.map((s) => {
+            const isSelected = s.id === chatId;
+            const isEditingThis = editingChatId === s.id;
 
             return (
               <div
-                key={msg.id}
-                className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'} animate-fadeIn`}
+                key={s.id}
+                onClick={() => handleSelectSession(s)}
+                className={`p-3 rounded-2xl cursor-pointer border transition-all text-xs flex flex-col justify-between group ${
+                  isSelected
+                    ? 'bg-emerald-50/80 border-emerald-400 text-emerald-950 font-bold shadow-xs'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
               >
-                {!isUser && (
-                  <div className="w-9 h-9 rounded-xl bg-slate-950 p-1 flex items-center justify-center shrink-0 border border-slate-800 shadow-xs">
-                    <img src="/logo.png" alt="Gramin Health" className="w-full h-full object-contain" />
-                  </div>
-                )}
-
-                <div className={`max-w-[85%] sm:max-w-[75%] space-y-2`}>
-                  <div
-                    className={`rounded-2xl p-4 shadow-xs text-sm leading-relaxed ${
-                      isUser
-                        ? 'bg-slate-900 text-white rounded-tr-none'
-                        : isEmergency
-                        ? 'bg-red-50 border-2 border-red-300 text-slate-900 rounded-tl-none shadow-red-500/10'
-                        : 'bg-white border border-slate-200 text-slate-900 rounded-tl-none'
-                    }`}
-                  >
-                    {/* Severity Header for Assistant Messages */}
-                    {!isUser && msg.severity && msg.severity !== 'UNKNOWN' && (
-                      <div className="mb-2">
-                        <TriageResultBadge severity={msg.severity} />
-                      </div>
-                    )}
-
-                    {/* Content */}
-                    <div className="whitespace-pre-wrap font-sans">
-                      {msg.content}
-                    </div>
-
-                    {/* Bottom Metadata & Voice Playback */}
-                    <div
-                      className={`flex items-center justify-between gap-3 mt-2.5 pt-2 text-[11px] border-t ${
-                        isUser ? 'border-slate-800 text-slate-400' : 'border-slate-100 text-slate-500'
-                      }`}
+                {isEditingThis ? (
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      value={editingChatTitle}
+                      onChange={(e) => setEditingChatTitle(e.target.value)}
+                      className="w-full px-2 py-1 text-xs rounded-lg border border-emerald-400 bg-white"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => handleSaveChatTitle(s.id, editingChatTitle)}
+                      className="p-1 text-emerald-700 hover:bg-emerald-100 rounded"
                     >
-                      <span>{msg.timestamp}</span>
-
-                      {!isUser && (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              if (speechSynthesis.isPlaying && speechSynthesis.currentText === msg.content) {
-                                speechSynthesis.stop();
-                              } else {
-                                speechSynthesis.speak(msg.content, isHindi ? 'hi-IN' : 'en-IN');
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-800 hover:underline"
-                            title="Listen to this response"
-                          >
-                            {speechSynthesis.isPlaying && speechSynthesis.currentText === msg.content ? (
-                              <>
-                                <VolumeX className="w-3.5 h-3.5 text-red-600 animate-pulse" />
-                                <span>{t('stopVoice')}</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>{t('playVoice')}</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                      <Check className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setEditingChatId(null)}
+                      className="p-1 text-slate-400 hover:bg-slate-200 rounded"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-
-                  {/* Contextual Action Buttons for Emergency or Assessment */}
-                  {!isUser && msg.severity === 'EMERGENCY' && (
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <a
-                        href="tel:108"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold shadow-xs hover:bg-red-700 transition-colors"
-                      >
-                        <PhoneCall className="w-3.5 h-3.5" />
-                        <span>108 {isHindi ? 'एम्बुलेंस डायल करें' : 'Call Ambulance'}</span>
-                      </a>
+                ) : (
+                  <div className="flex items-start justify-between gap-1">
+                    <span className="line-clamp-2 font-bold text-[11px] mb-1 flex-1 leading-snug">
+                      {s.title}
+                    </span>
+                    <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity">
                       <button
-                        onClick={onOpenDoctorSummary}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold shadow-xs hover:bg-slate-800 transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingChatId(s.id);
+                          setEditingChatTitle(s.title);
+                        }}
+                        className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-100 rounded"
+                        title={t('renameChat')}
                       >
-                        <FileText className="w-3.5 h-3.5 text-red-400" />
-                        <span>{t('viewDoctorSummary')}</span>
+                        <Edit2 className="w-3 h-3" />
                       </button>
                       <button
-                        onClick={onViewFacilities}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-red-200 text-red-700 text-xs font-bold hover:bg-red-50 transition-colors"
+                        onClick={(e) => handleDeleteSession(s.id, e)}
+                        className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
+                        title={t('deleteChat')}
                       >
-                        <MapPin className="w-3.5 h-3.5" />
-                        <span>{isHindi ? 'नजदीकी अस्पताल' : 'Nearby Hospital'}</span>
-                      </button>
-                    </div>
-                  )}
-
-                  {!isUser && msg.severity === 'SYMPTOM_ASSESSMENT' && (
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <button
-                        onClick={onOpenDoctorSummary}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold shadow-xs hover:bg-slate-800 transition-colors"
-                      >
-                        <FileText className="w-3.5 h-3.5 text-teal-400" />
-                        <span>{t('viewDoctorSummary')}</span>
-                      </button>
-                      <button
-                        onClick={onViewFacilities}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-teal-200 text-teal-700 text-xs font-bold hover:bg-teal-50 transition-colors"
-                      >
-                        <MapPin className="w-3.5 h-3.5" />
-                        <span>{isHindi ? 'निकटतम PHC खोजें' : 'Find Nearby PHC'}</span>
+                        <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
-                  )}
-                </div>
-
-                {isUser && (
-                  <div className="w-9 h-9 rounded-xl bg-slate-800 text-slate-200 flex items-center justify-center shrink-0 shadow-xs font-bold text-sm">
-                    <User className="w-5 h-5" />
                   </div>
                 )}
+
+                <div className="flex items-center justify-between text-[9px] text-slate-400 mt-1">
+                  <span>🕒 {s.date}</span>
+                  {s.messages.length > 0 && <span>{s.messages.length} msgs</span>}
+                </div>
               </div>
             );
           })}
-
-          {isLoading && (
-            <div className="flex items-center gap-3 animate-fadeIn">
-              <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                <Loader2 className="w-5 h-5 animate-spin" />
-              </div>
-              <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-none p-3.5 text-xs text-slate-600 flex items-center gap-2 shadow-xs">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-                <span>{isHindi ? 'आईसीएमआर गाइडलाइंस और खतरे के संकेतों का विश्लेषण हो रहा है...' : 'Evaluating against ICMR STWs & danger signs...'}</span>
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
         </div>
 
-        {/* Bottom Input Area: Voice Interface + Text Box */}
-        <div className="p-4 bg-white border-t border-slate-200 space-y-3">
-          {/* Active Voice Recorder Overlay or Trigger */}
-          <VoiceInterface
-            isRecording={voiceRecorder.isRecording || speechRecognition.isListening}
-            volumeLevel={voiceRecorder.volumeLevel}
-            durationSeconds={voiceRecorder.recordingDuration}
-            liveTranscript={speechRecognition.transcript || speechRecognition.interimTranscript}
-            onStartRecording={handleStartVoice}
-            onStopRecording={handleStopVoice}
-            isProcessing={isLoading}
-          />
+        {/* User Account / Guest info in Sidebar */}
+        <div className="pt-3 border-t border-slate-100 mt-2">
+          {isAuthenticated ? (
+            <div className="text-xs space-y-1">
+              <div className="font-bold text-slate-800 truncate">👤 {user?.name}</div>
+              <div className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-full inline-block">
+                PATIENT PORTAL
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">
+              <span className="block mb-1 font-semibold">{t('navGuest')}</span>
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="w-full py-1.5 rounded-xl bg-slate-900 text-white text-[11px] font-bold"
+              >
+                {t('navLogin')}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
 
-          {/* Text Input Row */}
-          {!voiceRecorder.isRecording && !speechRecognition.isListening && (
+      {/* MAIN TRIAGE CONSOLE COLUMN */}
+      <div className="lg:col-span-9 space-y-4">
+        {/* Top Preset Buttons Pill */}
+        <div className="flex items-center justify-between bg-white p-3 rounded-2xl border border-slate-200 text-xs">
+          <span className="font-bold text-slate-700 flex items-center gap-1 shrink-0">
+            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+            <span className="hidden sm:inline">{isHindi ? 'त्वरित परिदृश्य:' : 'Quick Presets:'}</span>
+          </span>
+          <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pl-2">
+            {PRESET_SCENARIOS.map((sc) => (
+              <button
+                key={sc.id}
+                onClick={() => handleSendText(isHindi ? sc.promptHi : sc.promptEn)}
+                className={`px-3 py-1 rounded-full text-[10px] font-extrabold whitespace-nowrap border transition-all ${
+                  sc.expected === 'EMERGENCY'
+                    ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                {isHindi ? sc.titleHi : sc.titleEn}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Chat Window Box */}
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm flex flex-col h-[540px] overflow-hidden">
+          {/* Header */}
+          <div className="bg-slate-950 text-white px-5 py-3.5 flex items-center justify-between border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 flex items-center justify-center shrink-0">
+                <img src="/logo.png" alt="Gramin Health" className="w-full h-full object-contain" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs sm:text-sm font-extrabold text-white">
+                    {activeChat?.title || 'Gramin Health Triage'}
+                  </h4>
+                  <button
+                    onClick={() => {
+                      if (activeChat) {
+                        setEditingChatId(activeChat.id);
+                        setEditingChatTitle(activeChat.title);
+                      }
+                    }}
+                    className="text-slate-400 hover:text-emerald-400 text-xs"
+                    title={t('renameChat')}
+                  >
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {isAuthenticated
+                    ? `${isHindi ? 'मरीज' : 'Patient'}: ${user?.name}`
+                    : t('navGuest')}{' '}
+                  • Session: {chatId.slice(0, 8)}...
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={initializeNewChat}
+                className="px-3 py-1 rounded-full bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold border border-slate-700 transition-colors flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" />
+                <span>{t('newChat')}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Messages Stream */}
+          <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4 bg-slate-50/50">
+            {messages.map((m) => {
+              const isUser = m.sender === 'user';
+              const isEm = m.severity === 'EMERGENCY';
+
+              return (
+                <div key={m.id} className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+                  {!isUser && (
+                    <div className="w-8 h-8 shrink-0 flex items-center justify-center">
+                      <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
+                    </div>
+                  )}
+
+                  <div className="max-w-[85%] sm:max-w-[78%] space-y-2">
+                    <div
+                      className={`p-4 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-xs ${
+                        isUser
+                          ? 'bg-slate-950 text-white rounded-tr-none'
+                          : isEm
+                          ? 'bg-red-50 border-2 border-red-300 text-slate-900 rounded-tl-none'
+                          : 'bg-white border border-slate-200 text-slate-900 rounded-tl-none'
+                      }`}
+                    >
+                      {!isUser && <TriageResultBadge severity={m.severity} />}
+
+                      <div className="whitespace-pre-wrap font-sans mt-1">
+                        {m.content}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-100 text-[10px] text-slate-400">
+                        <span>{m.timestamp}</span>
+                        {!isUser && (
+                          <button
+                            onClick={() => speak(m.content, isHindi ? 'hi' : 'en')}
+                            className="text-emerald-700 font-extrabold hover:underline flex items-center gap-1"
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                            <span>{t('playVoice')}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Action Buttons on AI Response */}
+                    {!isUser && (
+                      <div className="flex flex-wrap gap-2 pt-0.5">
+                        {isEm && (
+                          <a
+                            href="tel:108"
+                            className="px-3.5 py-1.5 rounded-full bg-red-600 hover:bg-red-700 text-white text-xs font-black flex items-center gap-1 shadow-xs"
+                          >
+                            <PhoneCall className="w-3 h-3" />
+                            <span>108 {t('callNow')}</span>
+                          </a>
+                        )}
+
+                        <button
+                          onClick={onOpenDoctorModal}
+                          className="px-3.5 py-1.5 rounded-full bg-slate-950 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1 shadow-xs"
+                        >
+                          <FileText className="w-3 h-3" />
+                          <span>{t('viewDoctorSummary')}</span>
+                        </button>
+
+                        <button
+                          onClick={onOpenFacilities}
+                          className="px-3.5 py-1.5 rounded-full bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-xs font-bold flex items-center gap-1"
+                        >
+                          <MapPin className="w-3 h-3 text-teal-600" />
+                          <span>{t('navFacilities')}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {isLoading && (
+              <div className="flex items-center gap-2.5 text-xs text-slate-600 font-bold p-3 bg-white rounded-2xl border border-slate-200 w-fit animate-pulse">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                <span>{isHindi ? 'AI क्लिनिकल ट्राइएज दिशानिर्देशों का विश्लेषण हो रहा है...' : 'Evaluating with AI clinical triage engine...'}</span>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input & Voice Controls */}
+          <div className="p-4 bg-white border-t border-slate-200 space-y-3">
+            {/* Glowing Voice Recording Button */}
+            <VoiceInterface
+              isRecording={isRecording}
+              recordingDuration={recordingDuration}
+              isPlayingAudio={isPlayingAudio}
+              onStartRecording={startRecording}
+              onStopRecording={handleStopAndUploadVoice}
+              onStopAudioPlayback={stopSpeech}
+            />
+
+            {/* Text Input & Submit */}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                handleSendMessage();
+                handleSendText();
               }}
               className="flex items-center gap-2"
             >
-              <div className="relative flex-1">
-                <input
-                  type="text"
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  placeholder={t('inputPlaceholder')}
-                  disabled={isLoading}
-                  className="w-full pl-4 pr-10 py-3 rounded-2xl bg-slate-100/90 border border-slate-200 focus:bg-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 text-xs sm:text-sm text-slate-900 transition-all font-sans"
-                />
-              </div>
-
+              <input
+                type="text"
+                disabled={isLoading || isRecording}
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder={t('inputPlaceholder')}
+                className="flex-1 px-4 py-3 rounded-full bg-slate-100 border border-slate-200 text-xs sm:text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 font-sans transition-all"
+              />
               <button
                 type="submit"
-                disabled={!inputText.trim() || isLoading}
-                className={`p-3 rounded-2xl text-white font-bold transition-all shadow-sm ${
+                disabled={!inputText.trim() || isLoading || isRecording}
+                className={`px-5 py-3 rounded-full text-white font-extrabold text-xs sm:text-sm flex items-center justify-center transition-all ${
                   !inputText.trim() || isLoading
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20'
+                    ? 'bg-slate-300 cursor-not-allowed'
+                    : 'bg-slate-950 hover:bg-slate-800 shadow-sm'
                 }`}
-                title={t('send')}
               >
-                <Send className="w-5 h-5" />
+                <Send className="w-4 h-4" />
               </button>
             </form>
-          )}
+          </div>
         </div>
       </div>
     </div>
   );
 };
-

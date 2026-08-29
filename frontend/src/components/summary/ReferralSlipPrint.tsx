@@ -1,167 +1,169 @@
 import React from 'react';
-import { ClinicalSummary, UserProfile } from '../../types';
-import { Hospital } from 'lucide-react';
+import { ClinicalSummaryResponse, TriageMessage } from '../../types';
+import { useLanguage } from '../../context/LanguageContext';
 
 interface ReferralSlipPrintProps {
-  summary: ClinicalSummary;
-  patientUser?: UserProfile | null;
+  summary?: ClinicalSummaryResponse | null;
+  messages: TriageMessage[];
+  patientName: string;
+  locationName: string;
+  dangerSigns: string[];
 }
 
-export const ReferralSlipPrint: React.FC<ReferralSlipPrintProps> = ({ summary, patientUser }) => {
-  const isRed = summary.severity_level === 'RED';
-  const formattedDate = new Date(summary.updated_at).toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-  const formattedTime = new Date(summary.updated_at).toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+export const ReferralSlipPrint: React.FC<ReferralSlipPrintProps> = ({
+  summary,
+  messages,
+  patientName,
+  locationName,
+  dangerSigns,
+}) => {
+  const { isHindi } = useLanguage();
+
+  const isEmergency =
+    summary?.severity_level === 'RED' ||
+    dangerSigns.length > 0 ||
+    messages.some((m) => m.severity === 'EMERGENCY');
+
+  // Fallbacks if AI summary is loading or offline
+  const situationText =
+    summary?.situation ||
+    messages
+      .filter((m) => m.sender === 'user')
+      .map((m) => m.content)
+      .join(' | ') ||
+    'Patient reporting acute symptoms during field consultation.';
+
+  const backgroundText =
+    summary?.background ||
+    `Field evaluation conducted via Gramin Health multilingual voice triage assistant at ${locationName}.`;
+
+  const assessmentText =
+    summary?.assessment ||
+    (dangerSigns.length > 0
+      ? `Active warning signs detected: ${dangerSigns.join(', ')}. High risk of deterioration without clinical intervention.`
+      : 'No acute red-flag respiratory or circulatory compromise detected. Patient requires MO physical examination.');
+
+  const recommendationText =
+    summary?.recommendation ||
+    (isEmergency
+      ? '1. Dispatch 108 Emergency Ambulance immediately.\n2. Transfer to 24x7 CHC/District Hospital emergency room.'
+      : '1. Visit nearest Primary Health Centre (PHC) Medical Officer for clinical examination.');
+
+  const targetFacility =
+    summary?.target_facility_type || (isEmergency ? 'CHC / District Hospital (24x7 ER)' : 'Primary Health Centre (PHC)');
 
   return (
-    <div id="printable-referral-slip" className="bg-white text-slate-900 p-8 rounded-2xl border-2 border-slate-300 font-sans max-w-3xl mx-auto shadow-sm">
-      {/* Official Referral Header with Gramin Health Logo */}
-      <div className="border-b-2 border-slate-900 pb-4 mb-5 flex items-start justify-between">
-        <div className="flex items-center gap-3.5">
-          <div className="w-12 h-12 rounded-xl bg-slate-950 p-1.5 flex items-center justify-center shrink-0 border border-slate-800">
-            <img src="/logo.png" alt="Gramin Health Logo" className="w-full h-full object-contain" />
+    <div
+      id="printable-referral-slip"
+      className="bg-white p-6 sm:p-8 rounded-2xl border-2 border-slate-300 text-slate-900 text-xs space-y-4 shadow-sm font-sans"
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between border-b-2 border-slate-900 pb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 flex items-center justify-center p-1 bg-slate-950 rounded-xl">
+            <img src="/logo.png" alt="Gramin Health" className="w-full h-full object-contain" />
           </div>
           <div>
-            <h1 className="text-xl font-extrabold tracking-tight uppercase text-slate-900">
-              Gramin Health • NHM Rural Triage
-            </h1>
-            <p className="text-xs font-semibold text-slate-600">
-              Emergency & Primary Care Clinical Referral Slip • SBAR Handover
+            <h2 className="text-base sm:text-lg font-black uppercase tracking-tight text-slate-900">
+              Gramin Health • NHM Clinical Referral Slip
+            </h2>
+            <p className="text-[11px] text-slate-600 font-medium">
+              SBAR Emergency Handover Note • Primary & Emergency Decision-Support
             </p>
           </div>
         </div>
 
-        {/* Severity Stamp */}
-        <div className="text-right">
-          <span
-            className={`inline-block px-3 py-1 rounded-lg text-xs font-extrabold uppercase border-2 ${
-              isRed
-                ? 'bg-red-50 text-red-700 border-red-600'
-                : 'bg-amber-50 text-amber-800 border-amber-500'
-            }`}
-          >
-            TRIAGE: {summary.severity_level} {isRed ? '(EMERGENCY)' : '(ROUTINE)'}
-          </span>
-          <div className="text-[10px] text-slate-500 mt-1 font-mono">
-            REF ID: {summary.summary_id.slice(0, 12)}
-          </div>
-        </div>
-      </div>
-
-      {/* Patient & Session Metadata Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs mb-5">
-        <div>
-          <span className="text-slate-500 block text-[10px] uppercase font-bold">Patient / Origin</span>
-          <span className="font-bold text-slate-800">{patientUser?.name || 'Walk-in / Field Patient'}</span>
-        </div>
-        <div>
-          <span className="text-slate-500 block text-[10px] uppercase font-bold">Contact / Phone</span>
-          <span className="font-bold text-slate-800">{patientUser?.phone || '+91 - Not Stated'}</span>
-        </div>
-        <div>
-          <span className="text-slate-500 block text-[10px] uppercase font-bold">Date & Time</span>
-          <span className="font-bold text-slate-800">{formattedDate} • {formattedTime}</span>
-        </div>
-        <div>
-          <span className="text-slate-500 block text-[10px] uppercase font-bold">Referred By</span>
-          <span className="font-bold text-slate-800">Gramin Health Assistant</span>
-        </div>
-      </div>
-
-      {/* Target Referral Center Callout */}
-      <div className="p-3.5 rounded-xl bg-teal-50/80 border border-teal-200 text-xs text-teal-950 mb-5 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Hospital className="w-5 h-5 text-teal-700" />
-          <div>
-            <span className="font-bold uppercase tracking-wider text-[10px] text-teal-800 block">
-              Target Referral Facility
-            </span>
-            <span className="font-extrabold text-sm text-teal-900">
-              {summary.target_facility_type}
-            </span>
-          </div>
-        </div>
-        <span className="px-2.5 py-1 rounded bg-teal-600 text-white font-bold text-xs">
-          Direct Medical Officer Handoff
+        <span
+          className={`px-3 py-1 rounded-full text-[11px] font-black uppercase border ${
+            isEmergency
+              ? 'bg-red-50 text-red-700 border-red-600'
+              : 'bg-emerald-50 text-emerald-800 border-emerald-600'
+          }`}
+        >
+          TRIAGE: {isEmergency ? 'RED (EMERGENCY)' : 'YELLOW (ROUTINE)'}
         </span>
       </div>
 
-      {/* SBAR Structured Clinical Notes */}
-      <div className="space-y-4 text-xs leading-relaxed">
-        {/* S - Situation */}
-        <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
-          <div className="flex items-center gap-1.5 font-extrabold text-slate-900 text-xs uppercase mb-1 text-red-700">
-            <span>S • Situation (Presenting Complaint & Triage Status)</span>
-          </div>
-          <p className="text-slate-800 whitespace-pre-wrap">{summary.situation}</p>
-        </div>
-
-        {/* B - Background */}
-        <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
-          <div className="flex items-center gap-1.5 font-extrabold text-slate-900 text-xs uppercase mb-1 text-indigo-700">
-            <span>B • Background (Clinical Timeline & History)</span>
-          </div>
-          <p className="text-slate-800 whitespace-pre-wrap">{summary.background}</p>
-        </div>
-
-        {/* A - Assessment */}
-        <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
-          <div className="flex items-center gap-1.5 font-extrabold text-slate-900 text-xs uppercase mb-1 text-amber-700">
-            <span>A • Assessment (Triage Rules & Guideline Findings)</span>
-          </div>
-          <p className="text-slate-800 whitespace-pre-wrap">{summary.assessment}</p>
-        </div>
-
-        {/* R - Recommendation */}
-        <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
-          <div className="flex items-center gap-1.5 font-extrabold text-slate-900 text-xs uppercase mb-1 text-teal-700">
-            <span>R • Recommendation (Pre-transfer Care & Immediate Actions)</span>
-          </div>
-          <p className="text-slate-800 whitespace-pre-wrap">{summary.recommendation}</p>
-        </div>
-      </div>
-
-      {/* Guidelines Applied */}
-      {summary.guideline_references && summary.guideline_references.length > 0 && (
-        <div className="mt-4 text-[11px] text-slate-500">
-          <span className="font-bold">Referenced Clinical STWs: </span>
-          <span>{summary.guideline_references.join(' | ')}</span>
-        </div>
-      )}
-
-      {/* Signatures & Verification Footer */}
-      <div className="mt-8 pt-4 border-t-2 border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-6 text-xs text-slate-600">
+      {/* Patient & Consultation Metadata */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-[11px]">
         <div>
-          <span className="block font-bold text-slate-800 mb-6">ASHA / Field Worker Signature</span>
-          <div className="border-b border-dashed border-slate-400 w-36"></div>
-          <span className="text-[10px] text-slate-400 mt-1 block">Verified on-site</span>
+          <span className="text-slate-400 block text-[9px] uppercase font-bold">
+            {isHindi ? 'मरीज का नाम' : 'Patient Name'}
+          </span>
+          <span className="font-extrabold text-slate-900">{patientName || 'Patient'}</span>
         </div>
 
         <div>
-          <span className="block font-bold text-slate-800 mb-6">Receiving Doctor / MO Signature</span>
-          <div className="border-b border-dashed border-slate-400 w-36"></div>
-          <span className="text-[10px] text-slate-400 mt-1 block">PHC / CHC Emergency Desk</span>
+          <span className="text-slate-400 block text-[9px] uppercase font-bold">
+            {isHindi ? 'दिनांक व समय' : 'Date & Time'}
+          </span>
+          <span className="font-bold text-slate-800">{new Date().toLocaleString('en-IN')}</span>
         </div>
 
-        <div className="text-right flex flex-col items-end">
-          <span className="text-[10px] font-mono text-slate-400 uppercase">Verification QR</span>
-          <div className="w-12 h-12 bg-slate-100 border border-slate-300 rounded flex items-center justify-center text-slate-500 font-mono text-[9px] mt-1">
-            [QR PASS]
-          </div>
+        <div>
+          <span className="text-slate-400 block text-[9px] uppercase font-bold">
+            {isHindi ? 'रेफरल क्षेत्र' : 'Field Location'}
+          </span>
+          <span className="font-bold text-slate-800 truncate block">{locationName}</span>
+        </div>
+
+        <div>
+          <span className="text-slate-400 block text-[9px] uppercase font-bold">
+            {isHindi ? 'अनुशंसित केंद्र' : 'Target Facility'}
+          </span>
+          <span className="font-extrabold text-emerald-800">{targetFacility}</span>
         </div>
       </div>
 
-      {/* Non-Diagnostic Disclaimer */}
-      <div className="mt-6 pt-3 border-t border-slate-100 text-[10px] text-center text-slate-400">
-        This document is an algorithmic triage referral note generated by Gramin Health under National Health Mission protocols. It is intended strictly for handover to registered medical officers and does not constitute a definitive medical diagnosis.
+      {/* SBAR Structured Content */}
+      <div className="space-y-3 leading-relaxed">
+        {/* Situation */}
+        <div className="p-3.5 bg-red-50/60 rounded-xl border border-red-200">
+          <span className="font-black text-red-900 uppercase block mb-1 text-[11px] tracking-wide">
+            S • Situation (Presenting Complaint & Triage Status)
+          </span>
+          <p className="text-slate-800 whitespace-pre-wrap">{situationText}</p>
+        </div>
+
+        {/* Background */}
+        <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+          <span className="font-black text-indigo-900 uppercase block mb-1 text-[11px] tracking-wide">
+            B • Background (Timeline of Symptoms & Clinical Context)
+          </span>
+          <p className="text-slate-800 whitespace-pre-wrap">{backgroundText}</p>
+        </div>
+
+        {/* Assessment */}
+        <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+          <span className="font-black text-amber-900 uppercase block mb-1 text-[11px] tracking-wide">
+            A • Assessment (STW Guideline Evaluation & Danger Signs)
+          </span>
+          <p className="text-slate-800 whitespace-pre-wrap">{assessmentText}</p>
+          {summary?.guideline_references && summary.guideline_references.length > 0 && (
+            <div className="mt-2 text-[10px] text-slate-500">
+              <b>Guidelines:</b> {summary.guideline_references.join(', ')}
+            </div>
+          )}
+        </div>
+
+        {/* Recommendation */}
+        <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-200">
+          <span className="font-black text-emerald-900 uppercase block mb-1 text-[11px] tracking-wide">
+            R • Recommendation (Facility Referral & Immediate Clinical Action)
+          </span>
+          <p className="text-slate-800 whitespace-pre-wrap">{recommendationText}</p>
+        </div>
+      </div>
+
+      {/* Signature & Verification Bar */}
+      <div className="pt-4 border-t-2 border-slate-200 flex justify-between items-center text-[10px] text-slate-500">
+        <div>
+          <span>Patient / Caregiver Signature: __________________</span>
+        </div>
+        <div>
+          <span>Receiving MO Signature & Stamp: __________________</span>
+        </div>
       </div>
     </div>
   );
 };
-

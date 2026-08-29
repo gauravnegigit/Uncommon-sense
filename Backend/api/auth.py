@@ -148,8 +148,8 @@ async def initiate_signup(
 ):  
     # 1. Check if email or phone already exists in registered users
     or_filters = []
-    contact = payload.contact.strip()
-    email = str(payload.email).lower()
+    contact = payload.contact.strip() if payload.contact else None
+    email = str(payload.email).strip().lower() if payload.email else None
 
     if payload.email:
         or_filters.append({"email": email})
@@ -164,8 +164,10 @@ async def initiate_signup(
 
     # 2. Generate OTPs and expiration
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    email_otp = generate_otp() if is_email(email) else None
-    phone_otp = generate_otp() if is_phone(contact) else None 
+
+
+    email_otp = generate_otp() if (email and is_email(email)) else None
+    phone_otp = generate_otp() if (contact and is_phone(contact)) else None 
 
     # 3. Store pending verification state in MongoDB
     # We store the hashed password or temporary payload along with the OTP
@@ -219,8 +221,8 @@ async def verify_signup(
     response : Response ,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    email = payload.email.lower() if is_email(payload.email) else None
-    phone = payload.phone.strip() if is_phone(payload.phone) else None
+    email = payload.email.strip().lower() if (payload.email and is_email(payload.email)) else None
+    phone = payload.phone.strip() if (payload.phone and is_phone(payload.phone)) else None
 
     # 1. Fetch pending record
     query_filter = {}
@@ -267,7 +269,7 @@ async def verify_signup(
         "name": pending["name"],
         "email": email,
         "phone": phone, 
-        "hashed_password": hash_password(pending["password"]),
+        "hashed_password": pending["password"],
         "address": pending["address"] ,
         "pincode": pending["pincode"] , 
         "role" : pending["role"] , 

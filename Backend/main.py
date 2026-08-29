@@ -76,10 +76,10 @@ app.include_router(
     prefix=settings.API_V1_PREFIX,
 )
 
-# app.include_router(
-#     summary.router,
-#     prefix=settings.API_V1_PREFIX,
-# )
+app.include_router(
+    summary.router,
+    prefix=settings.API_V1_PREFIX,
+)
 
 
 # HEALTH CHECK

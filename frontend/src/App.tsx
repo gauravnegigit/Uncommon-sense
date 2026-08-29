@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { LanguageProvider, useLanguage } from './context/LanguageContext';
+import { AuthProvider } from './context/AuthContext';
 import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 import { AuthModal } from './components/auth/AuthModal';
@@ -6,13 +8,12 @@ import { HomePage } from './pages/HomePage';
 import { GuidelinesPage } from './pages/GuidelinesPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { TriageMessage } from './types';
-import { useLanguage } from './context/LanguageContext';
 
-export const App: React.FC = () => {
+const AppContent: React.FC = () => {
   const { isHindi } = useLanguage();
   const [activeTab, setActiveTab] = useState<'triage' | 'facilities' | 'guidelines' | 'history'>('triage');
 
-  // Shared session messages
+  // Shared session messages & active chatId
   const [chatId, setChatId] = useState<string>(() => 'chat_' + Math.random().toString(36).substring(2, 11));
   const [messages, setMessages] = useState<TriageMessage[]>([
     {
@@ -27,11 +28,11 @@ export const App: React.FC = () => {
   ]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans selection:bg-emerald-500 selection:text-white">
-      {/* Top Navbar with Logo & Hotline */}
+    <div className="min-h-screen flex flex-col justify-between bg-[#fbfdfc] text-slate-900 font-sans selection:bg-emerald-500 selection:text-white">
+      {/* Top Navbar with Logo & Hotlines */}
       <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      {/* Main Container */}
+      {/* Main App Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {(activeTab === 'triage' || activeTab === 'facilities') && (
           <HomePage
@@ -44,16 +45,14 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeTab === 'guidelines' && (
-          <GuidelinesPage />
-        )}
+        {activeTab === 'guidelines' && <GuidelinesPage />}
 
         {activeTab === 'history' && (
           <HistoryPage currentMessages={messages} currentChatId={chatId} />
         )}
       </main>
 
-      {/* Auth Modal */}
+      {/* Patient Auth Modal */}
       <AuthModal />
 
       {/* Footer */}
@@ -62,5 +61,14 @@ export const App: React.FC = () => {
   );
 };
 
-export default App;
+export const App: React.FC = () => {
+  return (
+    <LanguageProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </LanguageProvider>
+  );
+};
 
+export default App;

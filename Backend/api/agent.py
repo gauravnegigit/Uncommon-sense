@@ -141,8 +141,3 @@ def workflow_controller(user_query: str, user_id: str , chat_id: str):
         "message": response_content 
     }
 
-
-    return {
-        "action": decision.intent,
-        "message": response_content 
-    }
