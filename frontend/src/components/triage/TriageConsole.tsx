@@ -93,13 +93,18 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
   const [customChatName, setCustomChatName] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const isInitialRender = useRef<boolean>(true);
 
-  // Auto-scroll messages to bottom
+  // Auto-scroll messages to bottom only when new messages are added, not on initial load
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
+    if (isInitialRender.current) {
+      isInitialRender.current = false;
+      return;
+    }
     scrollToBottom();
   }, [messages, isLoading]);
 
