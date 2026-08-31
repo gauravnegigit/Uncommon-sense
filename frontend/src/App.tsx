@@ -13,8 +13,14 @@ const AppContent: React.FC = () => {
   const { isHindi } = useLanguage();
   const [activeTab, setActiveTab] = useState<'triage' | 'facilities' | 'guidelines' | 'history'>('triage');
 
-  // Shared session messages & active chatId
-  const [chatId, setChatId] = useState<string>(() => 'chat_' + Math.random().toString(36).substring(2, 11));
+  // Shared session messages & active chatId - persisted to avoid duplicate creation on re-renders
+  const [chatId, setChatId] = useState<string>(() => {
+    const stored = localStorage.getItem('gramin_current_chat_id');
+    if (stored) return stored;
+    const newId = 'chat_' + Math.random().toString(36).substring(2, 11);
+    localStorage.setItem('gramin_current_chat_id', newId);
+    return newId;
+  });
   const [messages, setMessages] = useState<TriageMessage[]>([
     {
       id: 'msg_welcome',

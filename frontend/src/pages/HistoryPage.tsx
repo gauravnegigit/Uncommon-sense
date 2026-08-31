@@ -26,9 +26,13 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
     if (local) {
       try {
         const parsed: ChatSession[] = JSON.parse(local);
-        setSavedChats(parsed);
-        if (parsed.length > 0) {
-          setSelectedChat(parsed[0]);
+        // Filter out empty chats and chats that only have the welcome message
+        const filtered = parsed.filter((chat) => {
+          return chat.messages.length > 1 || (chat.messages.length === 1 && chat.messages[0].sender === 'user');
+        });
+        setSavedChats(filtered);
+        if (filtered.length > 0) {
+          setSelectedChat(filtered[0]);
         }
       } catch (e) {
         console.error(e);

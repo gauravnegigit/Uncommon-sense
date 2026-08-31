@@ -103,10 +103,23 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
     scrollToBottom();
   }, [messages, isLoading]);
 
-  // Sync saved sessions to localStorage
+  // Sync saved sessions to localStorage with cleanup
   useEffect(() => {
-    localStorage.setItem('gramin_saved_chats', JSON.stringify(savedSessions));
-  }, [savedSessions]);
+    // Filter out completely empty chats (only welcome message and no user interaction)
+    const cleaned = savedSessions.filter((sess) => {
+      // Keep chats that have:
+      // 1. More than just the welcome message, OR
+      // 2. Have a custom title (not the default new chat title), OR
+      // 3. Is the currently active chat
+      return (
+        sess.messages.length > 1 ||
+        (sess.title !== (isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation') &&
+          sess.title !== (isHindi ? 'प्राथमिक स्वास्थ्य परामर्श' : 'Initial Health Consultation')) ||
+        sess.id === chatId
+      );
+    });
+    localStorage.setItem('gramin_saved_chats', JSON.stringify(cleaned));
+  }, [savedSessions, chatId, isHindi]);
 
   // 1. Initial Triage Load: Must create new chat when user goes to triage for the first time
   const initializeNewChat = useCallback(async () => {
@@ -149,10 +162,13 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
 
   // Initialize on first mount if chatId is not in saved sessions
   useEffect(() => {
-    if (!chatId || chatId === 'default_chat' || !savedSessions.some((s) => s.id === chatId)) {
+    if (!chatId) return;
+    
+    const chatExists = savedSessions.some((s) => s.id === chatId);
+    if (!chatExists && chatId !== 'default_chat') {
       initializeNewChat();
     }
-  }, []);
+  }, [chatId, savedSessions.length]);
 
   // 2. Save Chat with Specific Name
   const handleSaveChatTitle = (targetId: string, newTitle: string) => {
