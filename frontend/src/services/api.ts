@@ -7,7 +7,7 @@ export const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 45000, // 45 seconds for LLM / Sarvam AI audio processing
+  timeout: 180000, // 45 seconds for LLM / Sarvam AI audio processing
 });
 
 api.interceptors.response.use(

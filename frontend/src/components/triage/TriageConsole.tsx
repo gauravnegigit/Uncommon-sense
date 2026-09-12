@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { TriageMessage, ChatSession, TriageSeverity } from '../../types';
 import { triageService } from '../../services/triageService';
+import { consultationStorage } from '../../services/consultationStorage';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { scanDangerSigns, PRESET_SCENARIOS } from '../../config/constants';
@@ -64,25 +65,65 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Chat sessions list
+  // Chat sessions list scoped to current user or guest session
   const [savedSessions, setSavedSessions] = useState<ChatSession[]>(() => {
-    const local = localStorage.getItem('gramin_saved_chats');
-    if (local) {
-      try {
-        return JSON.parse(local);
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [
-      {
-        id: 'default_chat',
-        title: isHindi ? 'प्राथमिक स्वास्थ्य परामर्श' : 'Initial Health Consultation',
-        date: 'Today',
-        messages: [],
-      },
-    ];
+    return consultationStorage.getSavedSessions(user?.id, isHindi);
   });
+
+  // 1. Fetch previous chats from /api/triage/chat_ids ONLY on initial load / sign-in
+  useEffect(() => {
+    const syncUserChats = async () => {
+      console.log(user)
+      console.log(isAuthenticated)
+      if (isAuthenticated && user?.id) {
+        try {
+          // Fetch past chat sessions and their titles using /chat_ids route only
+          const pastChats = await triageService.getChatIds();
+          if (Array.isArray(pastChats)) {
+            const formattedSessions: ChatSession[] = pastChats.map((c) => ({
+              id: c.chat_id,
+              title: c.title || (isHindi ? 'परामर्श' : 'Consultation'),
+              date: c.date || (isHindi ? 'आज' : 'Today'),
+              messages: [],
+            }));
+            setSavedSessions(formattedSessions);
+          }
+        } catch (e) {
+          console.warn('Backend getChatIds error:', e);
+        }
+
+        // Start with a clean new consultation session ready for new query
+        try {
+          const res = await triageService.startNewChat();
+          if (res && res.chat_id) {
+            setChatId(res.chat_id);
+            const welcomeMsg = consultationStorage.getDefaultWelcomeMessage(isHindi);
+            setMessages([welcomeMsg]);
+            setDangerSigns([]);
+          }
+        } catch (err) {
+          console.warn('Backend startNewChat error:', err);
+        }
+      } else {
+        const guestSessions = consultationStorage.getSavedSessions(undefined, isHindi);
+        setSavedSessions(guestSessions);
+      }
+    };
+
+    syncUserChats();
+  }, [isAuthenticated, user?.id, isHindi]);
+
+  // Sync saved sessions to user/guest storage whenever updated
+  useEffect(() => {
+    consultationStorage.saveSessions(user?.id, savedSessions);
+  }, [savedSessions, user?.id]);
+
+  // Persist active chat ID
+  useEffect(() => {
+    if (chatId) {
+      consultationStorage.setActiveChatId(user?.id, chatId);
+    }
+  }, [chatId, user?.id]);
 
   // Rename Chat inline state
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
@@ -92,43 +133,20 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
   const [isNamingChat, setIsNamingChat] = useState(false);
   const [customChatName, setCustomChatName] = useState('');
 
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const isInitialRender = useRef<boolean>(true);
-
-  // Auto-scroll messages to bottom only when new messages are added, not on initial load
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    if (isInitialRender.current) {
-      isInitialRender.current = false;
-      return;
-    }
-    scrollToBottom();
-  }, [messages, isLoading]);
-
-  // Sync saved sessions to localStorage with cleanup
-  useEffect(() => {
-    // Filter out completely empty chats (only welcome message and no user interaction)
-    const cleaned = savedSessions.filter((sess) => {
-      // Keep chats that have:
-      // 1. More than just the welcome message, OR
-      // 2. Have a custom title (not the default new chat title), OR
-      // 3. Is the currently active chat
-      return (
-        sess.messages.length > 1 ||
-        (sess.title !== (isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation') &&
-          sess.title !== (isHindi ? 'प्राथमिक स्वास्थ्य परामर्श' : 'Initial Health Consultation')) ||
-        sess.id === chatId
-      );
-    });
-    localStorage.setItem('gramin_saved_chats', JSON.stringify(cleaned));
-  }, [savedSessions, chatId, isHindi]);
-
-  // 1. Initial Triage Load: Must create new chat when user goes to triage for the first time
+  // 1. Initial Triage Load: Create or reset to a new chat
   const initializeNewChat = useCallback(async () => {
     stopSpeech();
+
+    // If current session is already empty (no user messages), just refresh it
+    const hasUserMessages = messages.some((m) => m.sender === 'user');
+    if (!hasUserMessages && messages.length > 0) {
+      const welcomeMsg = consultationStorage.getDefaultWelcomeMessage(isHindi);
+      setMessages([welcomeMsg]);
+      setDangerSigns([]);
+      setErrorMessage(null);
+      return;
+    }
+
     let newId = 'chat_' + Math.random().toString(36).substring(2, 11);
 
     try {
@@ -143,37 +161,13 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
     }
 
     const defaultTitle = isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation';
-    const welcomeMsg: TriageMessage = {
-      id: 'welcome_' + Date.now(),
-      sender: 'assistant',
-      content: isHindi
-        ? 'नमस्ते! मैं ग्रामीण हेल्थ (Gramin Health) ट्राइएज सहायक हूँ। कृपया मरीज के लक्षण बताएं या नीचे दिए गए माइक बटन को दबाकर हिंदी में बोलें।'
-        : 'Hello! I am your Gramin Health Triage & Referral Assistant. Please describe patient symptoms or speak using the microphone.',
-      timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      severity: 'UNKNOWN',
-    };
+    const welcomeMsg = consultationStorage.getDefaultWelcomeMessage(isHindi);
 
     setChatId(newId);
     setDangerSigns([]);
     setMessages([welcomeMsg]);
     setErrorMessage(null);
-
-    setSavedSessions((prev) => {
-      const exists = prev.some((s) => s.id === newId);
-      if (exists) return prev;
-      return [{ id: newId, title: defaultTitle, date: isHindi ? 'आज' : 'Today', messages: [welcomeMsg] }, ...prev];
-    });
-  }, [isAuthenticated, isHindi, setChatId, setDangerSigns, setMessages, stopSpeech]);
-
-  // Initialize on first mount if chatId is not in saved sessions
-  useEffect(() => {
-    if (!chatId) return;
-    
-    const chatExists = savedSessions.some((s) => s.id === chatId);
-    if (!chatExists && chatId !== 'default_chat') {
-      initializeNewChat();
-    }
-  }, [chatId, savedSessions.length]);
+  }, [isAuthenticated, isHindi, messages, setChatId, setDangerSigns, setMessages, stopSpeech]);
 
   // 2. Save Chat with Specific Name
   const handleSaveChatTitle = (targetId: string, newTitle: string) => {
@@ -187,26 +181,50 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
     setIsNamingChat(false);
   };
 
-  // 3. Switch Chat Session
-  const handleSelectSession = (sess: ChatSession) => {
+  // 3. When user clicks on a particular chat, THEN ONLY fetch history through /chat/{chat_id}/history
+  const handleSelectSession = async (sess: ChatSession) => {
     stopSpeech();
     setChatId(sess.id);
-    setMessages(
-      sess.messages.length > 0
-        ? sess.messages
-        : [
-            {
-              id: 'welcome_' + Date.now(),
-              sender: 'assistant',
-              content: isHindi
-                ? 'नमस्ते! कृपया मरीज के लक्षण बताएं या माइक से बोलें।'
-                : 'Hello! Please describe patient symptoms or speak using the microphone.',
-              timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-              severity: 'UNKNOWN',
-            },
-          ]
-    );
+    setIsLoading(true);
     setErrorMessage(null);
+
+    if (isAuthenticated && sess.id !== 'default_chat') {
+      try {
+        const hist = await triageService.getChatHistory(sess.id);
+        console.log("Yes")
+        if (Array.isArray(hist) && hist.length > 0) {
+          console.log("chat present")
+          const restoredMsgs: TriageMessage[] = hist.map((m: any, idx: number) => ({
+            id: `hist_${sess.id}_${idx}`,
+            sender: m.role === 'user' || m.type === 'human' || m.type === 'HumanMessage' ? 'user' : 'assistant',
+            content: m.content || '',
+            timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+            severity: 'UNKNOWN',
+          }));
+          setMessages(restoredMsgs);
+          const allText = restoredMsgs.map((m) => m.content).join(' ');
+          setDangerSigns(scanDangerSigns(allText));
+
+
+
+          setSavedSessions((prev) =>
+            prev.map((s) => (s.id === sess.id ? { ...s, messages: restoredMsgs } : s))
+          );
+          setIsLoading(false);
+          return;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch chat history from backend:', err);
+      }
+    }
+
+    setDangerSigns([]);
+    setMessages(
+      sess.messages && sess.messages.length > 0
+        ? sess.messages
+        : [consultationStorage.getDefaultWelcomeMessage(isHindi)]
+    );
+    setIsLoading(false);
   };
 
   // 4. Delete Chat Session
@@ -223,7 +241,10 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
     setSavedSessions((prev) => {
       const filtered = prev.filter((s) => s.id !== targetId);
       if (filtered.length === 0) {
-        setTimeout(() => initializeNewChat(), 100);
+        const defaultSess = consultationStorage.getDefaultSession(isHindi);
+        setChatId(defaultSess.id);
+        setMessages(defaultSess.messages);
+        return [defaultSess];
       } else if (chatId === targetId) {
         handleSelectSession(filtered[0]);
       }
@@ -277,19 +298,39 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
       const finalMessages = [...newMessages, astMsg];
       setMessages(finalMessages);
 
-      // Auto update saved sessions
+      // Auto update sidebar sessions with 5-6 word title
       setSavedSessions((prev) => {
-        const titleSnippet = query.slice(0, 32) + (query.length > 32 ? '...' : '');
-        return prev.map((s) => {
-          if (s.id === chatId) {
-            return {
-              ...s,
-              title: s.title === (isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation') ? titleSnippet : s.title,
+        const words = query.trim().split(/\s+/);
+        const titleSnippet = words.slice(0, 6).join(' ') + (words.length > 6 ? '...' : '');
+        const exists = prev.some((s) => s.id === chatId);
+        if (exists) {
+          return prev.map((s) => {
+            if (s.id === chatId) {
+              const isDefaultTitle =
+                s.title === (isHindi ? 'नया स्वास्थ्य परामर्श' : 'New Consultation') ||
+                s.title === (isHindi ? 'प्राथमिक स्वास्थ्य परामर्श' : 'Initial Health Consultation') ||
+                s.title === 'New Consultation' ||
+                s.title === 'Initial Health Consultation' ||
+                s.title === 'Consultation';
+              return {
+                ...s,
+                title: isDefaultTitle ? titleSnippet : s.title,
+                messages: finalMessages,
+              };
+            }
+            return s;
+          });
+        } else {
+          return [
+            {
+              id: chatId,
+              title: titleSnippet,
+              date: isHindi ? 'आज' : 'Today',
               messages: finalMessages,
-            };
-          }
-          return s;
-        });
+            },
+            ...prev,
+          ];
+        }
       });
 
       // Audio alerts for emergency
@@ -367,9 +408,22 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
       const finalMessages = [...newMessages, astMsg];
       setMessages(finalMessages);
 
-      setSavedSessions((prev) =>
-        prev.map((s) => (s.id === chatId ? { ...s, messages: finalMessages } : s))
-      );
+      setSavedSessions((prev) => {
+        const exists = prev.some((s) => s.id === chatId);
+        if (exists) {
+          return prev.map((s) => (s.id === chatId ? { ...s, messages: finalMessages } : s));
+        } else {
+          return [
+            {
+              id: chatId,
+              title: isHindi ? 'वॉयस परामर्श' : 'Voice Consultation',
+              date: isHindi ? 'आज' : 'Today',
+              messages: finalMessages,
+            },
+            ...prev,
+          ];
+        }
+      });
 
       if (astSeverity === 'EMERGENCY') {
         speak(
@@ -677,8 +731,6 @@ export const TriageConsole: React.FC<TriageConsoleProps> = ({
                 <span>{isHindi ? 'AI क्लिनिकल ट्राइएज दिशानिर्देशों का विश्लेषण हो रहा है...' : 'Evaluating with AI clinical triage engine...'}</span>
               </div>
             )}
-
-            <div ref={messagesEndRef} />
           </div>
 
           {/* Input & Voice Controls */}

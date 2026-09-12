@@ -1,11 +1,10 @@
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
-
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mongodb import MongoDBChatMessageHistory
-
+import httpx
 from rag.prompt import ROUTER_PROMPT
 from rag.retriever import setup_hybrid_retriever
 from core.config import settings
@@ -62,7 +61,7 @@ def delete_session_history(user_id: str, chat_id: str) -> bool:
 # --- 3. Context-Aware Pipeline Functions ---
 
 def route_patient_query(user_query: str, chat_history: list) -> QueryRoute:
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0 , http_client=httpx.Client(timeout = 3 * 60))
     structured_router = llm.with_structured_output(QueryRoute)
     
     prompt = ChatPromptTemplate.from_messages([

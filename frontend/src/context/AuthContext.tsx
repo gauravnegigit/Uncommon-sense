@@ -9,6 +9,7 @@ import {
   UserResponse,
 } from '../types';
 import { authService } from '../services/authService';
+import { consultationStorage } from '../services/consultationStorage';
 
 export type AuthModalMode = 'LOGIN' | 'SIGNUP' | 'OTP' | 'FORGOT' | 'RESET';
 
@@ -50,7 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const me = await authService.getMe();
       if (me && me.name) {
         setUser({
-          id: me.id,
+          id: me.id || (me as any)._id,
           name: me.name,
           email: me.email,
           phone: me.phone,
@@ -75,7 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (req: UserLoginRequest): Promise<UserResponse> => {
     const res = await authService.login(req);
     setUser({
-      id: res.id,
+      id: res.id || (res as any)._id,
       name: res.name,
       email: res.email,
       phone: res.phone,
@@ -98,7 +99,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const verifySignup = async (req: SignupVerifyRequest) => {
     const res = await authService.verifySignup(req);
     if (res.user) {
-      setUser(res.user);
+      setUser({
+        id: res.user.id || (res.user as any)._id,
+        name: res.user.name,
+        email: res.user.email,
+        phone: res.user.phone,
+        role: res.user.role,
+        created_at: res.user.created_at,
+      });
     } else {
       await checkSession();
     }
@@ -124,6 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.warn('Logout error', e);
     } finally {
+      consultationStorage.clearGuestStorage();
       setUser(null);
     }
   };

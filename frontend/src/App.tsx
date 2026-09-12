@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 import { AuthModal } from './components/auth/AuthModal';
@@ -8,30 +8,39 @@ import { HomePage } from './pages/HomePage';
 import { GuidelinesPage } from './pages/GuidelinesPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { TriageMessage } from './types';
+import { consultationStorage } from './services/consultationStorage';
 
 const AppContent: React.FC = () => {
   const { isHindi } = useLanguage();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'triage' | 'facilities' | 'guidelines' | 'history'>('triage');
 
-  // Shared session messages & active chatId - persisted to avoid duplicate creation on re-renders
+  // Shared session messages & active chatId - initialized via consultationStorage
   const [chatId, setChatId] = useState<string>(() => {
-    const stored = localStorage.getItem('gramin_current_chat_id');
-    if (stored) return stored;
-    const newId = 'chat_' + Math.random().toString(36).substring(2, 11);
-    localStorage.setItem('gramin_current_chat_id', newId);
-    return newId;
+    return consultationStorage.getActiveChatId(user?.id, isHindi);
   });
-  const [messages, setMessages] = useState<TriageMessage[]>([
-    {
-      id: 'msg_welcome',
-      sender: 'assistant',
-      content: isHindi
-        ? 'नमस्ते! मैं ग्रामीण हेल्थ (Gramin Health) ट्राइएज सहायक हूँ। कृपया मरीज के लक्षण बताएं या नीचे दिए गए माइक बटन को दबाकर हिंदी में बोलें।'
-        : 'Hello! I am your Gramin Health Triage & Referral Assistant. Please describe patient symptoms or speak using the microphone.',
-      timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      severity: 'UNKNOWN',
-    },
-  ]);
+  const [messages, setMessages] = useState<TriageMessage[]>(() => {
+    const sessions = consultationStorage.getSavedSessions(user?.id, isHindi);
+    const active = sessions.find((s) => s.id === chatId) || sessions[0];
+    return active && active.messages.length > 0
+      ? active.messages
+      : [consultationStorage.getDefaultWelcomeMessage(isHindi)];
+  });
+
+  // Keep state synced when user logs in or out
+  useEffect(() => {
+    const currentId = consultationStorage.getActiveChatId(user?.id, isHindi);
+    const sessions = consultationStorage.getSavedSessions(user?.id, isHindi);
+    const active = sessions.find((s) => s.id === currentId) || sessions[0];
+    if (active) {
+      setChatId(active.id);
+      setMessages(active.messages && active.messages.length > 0 ? active.messages : [consultationStorage.getDefaultWelcomeMessage(isHindi)]);
+    } else {
+      const defaultSess = consultationStorage.getDefaultSession(isHindi);
+      setChatId(defaultSess.id);
+      setMessages(defaultSess.messages);
+    }
+  }, [user?.id]);
 
   return (
     <div className="min-h-screen flex flex-col justify-between bg-[#fbfdfc] text-slate-900 font-sans selection:bg-emerald-500 selection:text-white">

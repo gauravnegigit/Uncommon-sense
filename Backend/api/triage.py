@@ -8,7 +8,7 @@ from db.mongo import get_db
 from .agent import  delete_session_history, get_session_history, workflow_controller
 from api.auth import  get_current_user_from_cookie
 from core.config import settings
-
+import json 
 import tempfile
 import os
 import requests
@@ -132,7 +132,129 @@ async def get_chat_history(
     current_user: UserDB = Depends(get_current_user_from_cookie), 
 ):
     sessions = get_session_history(user_id=current_user.id, chat_id=chat_id)
-    return sessions.messages
+    serialized = []
+    for msg in sessions.messages:
+        role = "user" if getattr(msg, "type", "") in ["human", "HumanMessage"] else "assistant"
+        content = getattr(msg, "content", "")
+        serialized.append({
+            "role": role,
+            "type": getattr(msg, "type", "ai"),
+            "content": content
+        })
+    return serialized
+
+@router.get("/chat_ids")
+async def get_user_chat_ids(
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db)
+):
+# 1. Fetch relevant fields chronologically
+    cursor = db["chat_histories"].find(
+        {
+            "$or": [
+                {"SessionId": {"$regex": f"^{current_user.id}:"}},
+                {"session_id": {"$regex": f"^{current_user.id}:"}}
+            ]
+        },
+        {"SessionId": 1, "session_id": 1, "History": 1, "history": 1, "messages": 1}
+    ).sort("_id", 1)  # Earliest documents first
+
+    chat_sessions = {}
+
+    async for doc in cursor:
+        session_id_str = doc.get("SessionId") or doc.get("session_id") or ""
+        if ":" not in session_id_str:
+            continue
+
+        # Extract actual chat_id from composite string (e.g. "user_id:chat_id")
+        chat_id = session_id_str.split(":", 1)[1]
+
+        # Get document creation timestamp from ObjectId
+        doc_time = doc["_id"].generation_time if ("_id" in doc and hasattr(doc["_id"], "generation_time")) else None
+
+        # Track session timestamps
+        if chat_id not in chat_sessions:
+            chat_sessions[chat_id] = {
+                "first_question": "",
+                "first_time": doc_time,
+                "last_time": doc_time
+            }
+        else:
+            if doc_time:
+                chat_sessions[chat_id]["last_time"] = doc_time
+
+        # Skip question parsing if we already found the first question for this session
+        if chat_sessions[chat_id]["first_question"]:
+            continue
+
+        # Extract Raw History Field
+        raw_history = doc.get("History") or doc.get("history") or doc.get("messages")
+        
+        # --- FIX: Parse JSON string if stored as string ---
+        parsed_history = raw_history
+        if isinstance(raw_history, str):
+            try:
+                parsed_history = json.loads(raw_history)
+            except Exception:
+                parsed_history = raw_history
+
+        first_q = ""
+
+        # Case A: Parsed as Dictionary
+        if isinstance(parsed_history, dict):
+            msg_type = parsed_history.get("type", "")
+            data = parsed_history.get("data", {})
+            content = data.get("content", "") if isinstance(data, dict) else parsed_history.get("content", "")
+            
+            if msg_type in ["human", "HumanMessage"] and content and isinstance(content, str):
+                first_q = content.strip()
+
+        # Case B: Parsed as List
+        elif isinstance(parsed_history, list):
+            for msg in parsed_history:
+                if isinstance(msg, dict):
+                    msg_type = msg.get("type", "")
+                    data = msg.get("data", {})
+                    content = data.get("content", "") if isinstance(data, dict) else msg.get("content", "")
+                    if msg_type in ["human", "HumanMessage"] and content and isinstance(content, str):
+                        first_q = content.strip()
+                        break
+
+        # Save extracted question
+        if first_q:
+            chat_sessions[chat_id]["first_question"] = first_q
+
+    # 2. Format Results (Sorted by newest activity first)
+    results = []
+    sorted_chats = sorted(
+        chat_sessions.items(),
+        key=lambda item: item[1]["last_time"] or item[1]["first_time"] or 0,
+        reverse=True
+    )
+
+    for chat_id, data in sorted_chats:
+        first_question = data["first_question"]
+
+        # Generate 5-6 word title
+        words = first_question.strip().split() if first_question else []
+        if words:
+            selected_words = words[:6]
+            title = " ".join(selected_words)
+            if len(words) > 6:
+                title += "..."
+        else:
+            title = "Consultation"
+
+        t = data["last_time"] or data["first_time"]
+        date_str = t.strftime("%d %b %Y, %I:%M %p") if t else "Today"
+
+        results.append({
+            "chat_id": chat_id,
+            "title": title,
+            "date": date_str
+        })
+
+    return results
 
 @router.delete("/chat/{chat_id}")
 async def delete_chat(

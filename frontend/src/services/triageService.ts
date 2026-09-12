@@ -37,6 +37,12 @@ export const triageService = {
     return response.data;
   },
 
+  // Get all past chat sessions and their titles from backend
+  async getChatIds(): Promise<{ chat_id: string; title: string; date?: string }[]> {
+    const response = await api.get<{ chat_id: string; title: string; date?: string }[]>('/triage/chat_ids');
+    return response.data;
+  },
+
   // Get session history from MongoDB
   async getChatHistory(chatId: string): Promise<any[]> {
     const response = await api.get<any[]>(`/triage/chat/${chatId}/history`);

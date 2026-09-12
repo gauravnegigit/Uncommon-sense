@@ -48,6 +48,7 @@ class UserLoginRequest(BaseModel):
     role: Optional[str] = "PATIENT"
 
 class UserResponse(BaseModel):
+    id: Optional[str] = None
     name: str
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
@@ -293,11 +294,14 @@ async def verify_signup(
     # Clean up pending record
     await db.pending_signups.delete_one({"_id": pending["_id"]})
 
-    return {
-        "success": True,
-        "message": "Registration complete! Account created successfully.",
-        "user": new_user
-    }
+    return UserResponse(
+        id = user_id , 
+        name=new_user["name"],
+        email=email,
+        phone=phone,
+        role=new_user["role"],
+        created_at=new_user["created_at"].isoformat() if isinstance(new_user["created_at"], datetime) else str(new_user["created_at"]),
+    )
 
 # ---------- Login ----------
 
@@ -341,6 +345,7 @@ async def login(
         id=user_id,
         name=user["name"],
         email=user["email"],
+        phone=user["phone"] , 
         role=user["role"],
         created_at=user["created_at"],
     )

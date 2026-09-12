@@ -84,7 +84,7 @@ async def _ensure_indexes() -> None:
         "facility_type"
     )
     # Triage sessions
-    await db["chat_histories"].create_index([("SessionId", 1)])
+    await db["chat_histories"].create_index([("SessionId", 1), ("_id", 1)])
 
     # Patient summaries
     await db["clinical_summaries"].create_index(

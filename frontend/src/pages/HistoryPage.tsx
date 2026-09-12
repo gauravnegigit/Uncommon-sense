@@ -3,6 +3,8 @@ import { History, MessageSquare, FileText, Calendar, Trash2, ShieldAlert } from 
 import { ChatSession, TriageMessage } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { consultationStorage } from '../services/consultationStorage';
+import { triageService } from '../services/triageService';
 import { DoctorSummaryModal } from '../components/summary/DoctorSummaryModal';
 
 interface HistoryPageProps {
@@ -22,29 +24,74 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
   const [isSummaryOpen, setIsSummaryOpen] = useState<boolean>(false);
 
   useEffect(() => {
-    const local = localStorage.getItem('gramin_saved_chats');
-    if (local) {
-      try {
-        const parsed: ChatSession[] = JSON.parse(local);
-        // Filter out empty chats and chats that only have the welcome message
-        const filtered = parsed.filter((chat) => {
-          return chat.messages.length > 1 || (chat.messages.length === 1 && chat.messages[0].sender === 'user');
-        });
-        setSavedChats(filtered);
-        if (filtered.length > 0) {
-          setSelectedChat(filtered[0]);
+    const loadHistory = async () => {
+      if (!isAuthenticated) {
+        const guestSessions = consultationStorage.getSavedSessions(undefined, isHindi);
+        const filtered = guestSessions.filter(
+          (c) => c.messages && (c.messages.some((m) => m.sender === 'user') || c.id === 'default_chat')
+        );
+        const toShow = filtered.length > 0 ? filtered : [consultationStorage.getDefaultSession(isHindi)];
+        setSavedChats(toShow);
+        setSelectedChat(toShow[0] || null);
+      } else {
+        try {
+          const pastChats = await triageService.getChatIds();
+          if (Array.isArray(pastChats) && pastChats.length > 0) {
+            const restoredSessions: ChatSession[] = await Promise.all(
+              pastChats.map(async (c) => {
+                let msgs: TriageMessage[] = [];
+                try {
+                  const hist = await triageService.getChatHistory(c.chat_id);
+                  if (Array.isArray(hist) && hist.length > 0) {
+                    msgs = hist.map((m: any, idx: number) => ({
+                      id: `hist_${c.chat_id}_${idx}`,
+                      sender: m.role === 'user' || m.type === 'human' || m.type === 'HumanMessage' ? 'user' : 'assistant',
+                      content: m.content || '',
+                      timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+                      severity: 'UNKNOWN',
+                    }));
+                  }
+                } catch (e) {
+                  console.warn(`Error restoring history for ${c.chat_id}`, e);
+                }
+                return {
+                  id: c.chat_id,
+                  title: c.title || (isHindi ? 'परामर्श' : 'Consultation'),
+                  date: c.date || (isHindi ? 'आज' : 'Today'),
+                  messages: msgs,
+                };
+              })
+            );
+            setSavedChats(restoredSessions);
+            setSelectedChat(restoredSessions[0] || null);
+            return;
+          }
+        } catch (err) {
+          console.warn('Backend getChatIds error in HistoryPage:', err);
         }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  }, []);
 
-  const handleDeleteChat = (id: string, e: React.MouseEvent) => {
+        const userSessions = consultationStorage.getSavedSessions(user?.id, isHindi);
+        setSavedChats(userSessions);
+        setSelectedChat(userSessions[0] || null);
+      }
+    };
+
+    loadHistory();
+  }, [isAuthenticated, user?.id, isHindi]);
+
+  const handleDeleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    try {
+      if (isAuthenticated) {
+        await triageService.deleteChat(id);
+      }
+    } catch (err) {
+      console.warn('Backend delete chat note:', err);
+    }
+
     const updated = savedChats.filter((c) => c.id !== id);
     setSavedChats(updated);
-    localStorage.setItem('gramin_saved_chats', JSON.stringify(updated));
+    consultationStorage.saveSessions(user?.id, updated);
     if (selectedChat?.id === id) {
       setSelectedChat(updated[0] || null);
     }
@@ -210,7 +257,7 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({
           onClose={() => setIsSummaryOpen(false)}
           chatId={selectedChat.id}
           messages={selectedChat.messages}
-          dangerSigns={[]}
+          dangerSigns={selectedChat.messages.flatMap((m) => m.dangerSignsDetected || [])}
           locationName="Saved Consultation"
         />
       )}

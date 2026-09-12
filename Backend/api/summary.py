@@ -10,6 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from db.models import ClinicalSummaryResponse
 from db.mongo import get_db
 from db.models import UserDB
+import httpx
 
 router = APIRouter(prefix="/summary", tags=["Clinical Summary Generation"])
 
@@ -75,9 +76,11 @@ async def generate_patient_summary(
         ("user", "Conversation History:{history}"),  
     ])
 
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0).with_structured_output(Summary)
+    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0 , http_client=httpx.Client(timeout = 3 * 60)).with_structured_output(Summary)
     chain = prompt | llm
     raw_messages = get_session_history(str(current_user.id) , chat_id).messages
+    if not raw_messages:
+        raise HTTPException(status_code=400, detail="No conversation history found for this consultation to generate a doctor summary.")
     formatted_history = get_buffer_string(raw_messages)
     chain_response = chain.invoke({"history":formatted_history})
 
