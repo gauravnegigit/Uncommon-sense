@@ -1,10 +1,12 @@
 """
-Patient profiles.
-A Patient is the demographic/contact identity used by appointments,
-queue management and future clinical records. A patient does not need
-their own login: ASHA workers or facility staff can register patients
-who may later be linked to a User account.
+Patient records:
+A Patient is a lightweight demographic + contact profile — NOT the clinical
+longitudinal record. It exists separately because an ASHA worker or facility
+staff member may register a walk-in patient who does not have a login.
+User (optional login) <-- linked_user_id --> Patient profile
+Appointments, queue entries and clinical records reference patient_id.
 """
+
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -14,34 +16,37 @@ from pydantic import BaseModel, Field
 
 from api.auth import get_current_user_from_cookie
 from core.roles import require_self_or_staff, require_staff
-from db.models import UserDB
+from db.models import UserDB, UserRole
 from db.mongo import get_db
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
 
 class PatientCreateRequest(BaseModel):
-    name: str = Field(..., min_length=2, max_length=150)
+    name: str
     age: int | None = Field(default=None, ge=0, le=130)
-    gender: str | None = Field(default=None, max_length=20)
-    phone: str | None = Field(default=None, max_length=20)
-    address: str | None = Field(default=None, max_length=300)
-    pincode: str | None = Field(default=None, min_length=5, max_length=10)
-    preferred_language: str = Field(default="hi", max_length=10)
+    gender: str | None = Field(
+        default=None,
+        description="MALE, FEMALE, or OTHER",
+    )
+    phone: str | None = None
+    address: str | None = None
+    pincode: str | None = None
+    preferred_language: str = Field(
+        default="hi",
+        description="hi, mr, or en",
+    )
     home_facility_id: str | None = None
 
 
 class PatientUpdateRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=2, max_length=150)
+    name: str | None = None
     age: int | None = Field(default=None, ge=0, le=130)
-    gender: str | None = Field(default=None, max_length=20)
-    phone: str | None = Field(default=None, max_length=20)
-    address: str | None = Field(default=None, max_length=300)
-    pincode: str | None = Field(default=None, min_length=5, max_length=10)
-    preferred_language: str | None = Field(default=None, max_length=10)
+    gender: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    pincode: str | None = None
+    preferred_language: str | None = None
     home_facility_id: str | None = None
 
 
@@ -79,10 +84,6 @@ def patient_response(doc: dict) -> PatientResponse:
     )
 
 
-# ---------------------------------------------------------------------------
-# Create patient
-# ---------------------------------------------------------------------------
-
 @router.post(
     "",
     response_model=PatientResponse,
@@ -93,28 +94,38 @@ async def create_patient(
     current_user: UserDB = Depends(get_current_user_from_cookie),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    require_staff(current_user)
+    """
+    Patients can create their own profile once.
+    Doctors and ASHA workers can register walk-in patients.
+    """
+    linked_user_id: str | None = None
 
-    if payload.home_facility_id:
-        facility = await db.facilities.find_one(
-            {"_id": payload.home_facility_id},
-            {"_id": 1},
+    if current_user.role == UserRole.PATIENT.value:
+        existing = await db.patients.find_one(
+            {"linked_user_id": current_user.id}
         )
-        if not facility:
+        if existing:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Home facility not found.",
+                status.HTTP_409_CONFLICT,
+                "A patient profile is already linked to this account.",
             )
+        linked_user_id = current_user.id
+    else:
+        require_staff(current_user)
 
     now = datetime.now(timezone.utc)
-
     doc = {
         "_id": str(uuid4()),
         **payload.model_dump(),
-        "name": payload.name.strip(),
-        "preferred_language": payload.preferred_language.lower(),
-        "registered_by": current_user.id,
-        "linked_user_id": None,
+        "linked_user_id": linked_user_id,
+        "registered_by": (
+            current_user.id
+            if current_user.role in {
+                UserRole.DOCTOR.value,
+                UserRole.ASHA_WORKER.value,
+            }
+            else None
+        ),
         "created_at": now,
         "updated_at": now,
     }
@@ -123,176 +134,132 @@ async def create_patient(
     return patient_response(doc)
 
 
-# ---------------------------------------------------------------------------
-# Get patient
-# ---------------------------------------------------------------------------
+@router.get("/me", response_model=PatientResponse)
+async def get_my_patient_profile(
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    doc = await db.patients.find_one(
+        {"linked_user_id": current_user.id}
+    )
 
-@router.get("/{patient_id}", response_model=PatientResponse)
+    if not doc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No patient profile linked to this account yet.",
+        )
+
+    return patient_response(doc)
+
+
+@router.get("", response_model=list[PatientResponse])
+async def search_patients(
+    name: str | None = None,
+    phone: str | None = None,
+    pincode: str | None = None,
+    home_facility_id: str | None = None,
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Facility staff search for existing patient profiles."""
+    require_staff(current_user)
+
+    query: dict = {}
+
+    if name:
+        query["name"] = {
+            "$regex": name,
+            "$options": "i",
+        }
+    if phone:
+        query["phone"] = phone
+    if pincode:
+        query["pincode"] = pincode
+    if home_facility_id:
+        query["home_facility_id"] = home_facility_id
+
+    cursor = (
+        db.patients
+        .find(query)
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(limit)
+    )
+
+    return [
+        patient_response(doc)
+        async for doc in cursor
+    ]
+
+
+@router.get(
+    "/{patient_id}",
+    response_model=PatientResponse,
+)
 async def get_patient(
     patient_id: str,
     current_user: UserDB = Depends(get_current_user_from_cookie),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    patient = await db.patients.find_one({"_id": patient_id})
+    doc = await db.patients.find_one(
+        {"_id": patient_id}
+    )
 
-    if not patient:
+    if not doc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found.",
+            status.HTTP_404_NOT_FOUND,
+            "Patient not found.",
         )
 
-    require_self_or_staff(current_user, patient.get("linked_user_id"))
+    require_self_or_staff(
+        current_user,
+        doc.get("linked_user_id"),
+    )
 
-    return patient_response(patient)
+    return patient_response(doc)
 
 
-# ---------------------------------------------------------------------------
-# Update patient
-# ---------------------------------------------------------------------------
-
-@router.patch("/{patient_id}", response_model=PatientResponse)
+@router.patch(
+    "/{patient_id}",
+    response_model=PatientResponse,
+)
 async def update_patient(
     patient_id: str,
     payload: PatientUpdateRequest,
     current_user: UserDB = Depends(get_current_user_from_cookie),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    patient = await db.patients.find_one({"_id": patient_id})
-
-    if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found.",
-        )
-
-    require_self_or_staff(current_user, patient.get("linked_user_id"))
-
-    if payload.home_facility_id:
-        facility = await db.facilities.find_one(
-            {"_id": payload.home_facility_id},
-            {"_id": 1},
-        )
-        if not facility:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Home facility not found.",
-            )
-
-    updates = payload.model_dump(exclude_unset=True)
-
-    if "name" in updates and updates["name"]:
-        updates["name"] = updates["name"].strip()
-
-    if "preferred_language" in updates and updates["preferred_language"]:
-        updates["preferred_language"] = updates[
-            "preferred_language"
-        ].lower()
-
-    if not updates:
-        return patient_response(patient)
-
-    updates["updated_at"] = datetime.now(timezone.utc)
-
-    await db.patients.update_one(
-        {"_id": patient_id},
-        {"$set": updates},
+    doc = await db.patients.find_one(
+        {"_id": patient_id}
     )
 
-    updated = await db.patients.find_one({"_id": patient_id})
-    return patient_response(updated)
-
-
-# ---------------------------------------------------------------------------
-# Link a patient profile to a login account
-# ---------------------------------------------------------------------------
-
-@router.post(
-    "/{patient_id}/link-user/{user_id}",
-    response_model=PatientResponse,
-)
-async def link_user(
-    patient_id: str,
-    user_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    require_staff(current_user)
-
-    patient = await db.patients.find_one({"_id": patient_id})
-    if not patient:
+    if not doc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Patient not found.",
+            status.HTTP_404_NOT_FOUND,
+            "Patient not found.",
         )
 
-    user = await db.users.find_one({"_id": user_id})
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
+    require_self_or_staff(
+        current_user,
+        doc.get("linked_user_id"),
+    )
+
+    updates = {
+        key: value
+        for key, value in payload.model_dump().items()
+        if value is not None
+    }
+
+    if updates:
+        updates["updated_at"] = datetime.now(timezone.utc)
+
+        await db.patients.update_one(
+            {"_id": patient_id},
+            {"$set": updates},
         )
 
-    existing = await db.patients.find_one(
-        {
-            "linked_user_id": user_id,
-            "_id": {"$ne": patient_id},
-        }
-    )
+        doc.update(updates)
 
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This user is already linked to another patient.",
-        )
-
-    await db.patients.update_one(
-        {"_id": patient_id},
-        {
-            "$set": {
-                "linked_user_id": user_id,
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
-    )
-
-    updated = await db.patients.find_one({"_id": patient_id})
-    return patient_response(updated)
-
-
-# ---------------------------------------------------------------------------
-# Staff patient search
-# ---------------------------------------------------------------------------
-
-@router.get("", response_model=list[PatientResponse])
-async def search_patients(
-    q: str | None = Query(
-        default=None,
-        description="Search by patient name or phone",
-    ),
-    facility_id: str | None = None,
-    limit: int = Query(default=20, ge=1, le=100),
-    skip: int = Query(default=0, ge=0),
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    require_staff(current_user)
-
-    query: dict = {}
-
-    if facility_id:
-        query["home_facility_id"] = facility_id
-
-    if q:
-        search = q.strip()
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"phone": {"$regex": search, "$options": "i"}},
-        ]
-    cursor = (
-        db.patients
-        .find(query)
-        .sort("name", 1)
-        .skip(skip)
-        .limit(limit)
-    )
-    return [patient_response(doc) async for doc in cursor]
+    return patient_response(doc)

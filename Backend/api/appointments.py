@@ -4,11 +4,11 @@ Appointments + Queue Management
 Responsibilities:
 - Appointment booking and management
 - Appointment check-in
-- Queue token generation
+- Walk-in queue/token issuance
 - Queue state management
 - Queue position and waiting-time calculation
 
-Design:
+Flow:
     Appointment
         ↓
     Patient arrives
@@ -17,7 +17,7 @@ Design:
         ↓
     Queue token
         ↓
-    Waiting → Called → In Consultation → Completed
+    WAITING → CALLED → IN_CONSULTATION → COMPLETED
 
 Queue tokens are generated atomically per facility per day.
 Queue dates use India Standard Time (Asia/Kolkata).
@@ -35,8 +35,8 @@ from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 
 from api.auth import get_current_user_from_cookie
-from core.roles import Roles, require_self_or_staff, require_staff
-from db.models import UserDB
+from core.roles import require_self_or_staff, require_staff
+from db.models import Priority, UserDB, UserRole
 from db.mongo import get_db
 
 
@@ -48,7 +48,10 @@ router = APIRouter(
 INDIA_TIMEZONE = ZoneInfo("Asia/Kolkata")
 DEFAULT_AVG_CONSULT_MINUTES = 8
 
+
+# ============================================================================
 # ENUMS
+# ============================================================================
 
 class AppointmentStatus(str, Enum):
     BOOKED = "BOOKED"
@@ -57,10 +60,12 @@ class AppointmentStatus(str, Enum):
     CANCELLED = "CANCELLED"
     NO_SHOW = "NO_SHOW"
 
+
 class PreferredSlot(str, Enum):
     MORNING = "MORNING"
     AFTERNOON = "AFTERNOON"
     EVENING = "EVENING"
+
 
 class QueueStatus(str, Enum):
     WAITING = "WAITING"
@@ -70,11 +75,14 @@ class QueueStatus(str, Enum):
     SKIPPED = "SKIPPED"
     CANCELLED = "CANCELLED"
 
-class QueuePriority(str, Enum):
-    NORMAL = "NORMAL"
-    URGENT = "URGENT"
 
-# Valid queue state transitions.
+ACTIVE_QUEUE_STATUSES = {
+    QueueStatus.WAITING.value,
+    QueueStatus.CALLED.value,
+    QueueStatus.IN_CONSULTATION.value,
+}
+
+
 VALID_QUEUE_TRANSITIONS = {
     QueueStatus.WAITING: {
         QueueStatus.CALLED,
@@ -83,6 +91,7 @@ VALID_QUEUE_TRANSITIONS = {
     },
     QueueStatus.CALLED: {
         QueueStatus.IN_CONSULTATION,
+        QueueStatus.SKIPPED,
         QueueStatus.CANCELLED,
     },
     QueueStatus.IN_CONSULTATION: {
@@ -93,13 +102,18 @@ VALID_QUEUE_TRANSITIONS = {
     QueueStatus.CANCELLED: set(),
 }
 
+
+# ============================================================================
 # APPOINTMENT SCHEMAS
+# ============================================================================
+
 class AppointmentCreateRequest(BaseModel):
     patient_id: str
     facility_id: str
     requested_date: date
     preferred_slot: PreferredSlot = PreferredSlot.MORNING
     reason: str | None = None
+
 
 class AppointmentResponse(BaseModel):
     id: str
@@ -114,12 +128,16 @@ class AppointmentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
+# ============================================================================
 # QUEUE SCHEMAS
+# ============================================================================
 
 class WalkInRequest(BaseModel):
     facility_id: str
     patient_id: str
-    priority: QueuePriority = QueuePriority.NORMAL
+    priority: Priority = Priority.NORMAL
+
 
 class QueueEntryResponse(BaseModel):
     id: str
@@ -132,28 +150,48 @@ class QueueEntryResponse(BaseModel):
     priority: str
     position: int | None = Field(
         default=None,
-        description="Current position among active queue entries.",
+        description="Current 1-indexed position among active queue entries.",
     )
     estimated_wait_minutes: int | None = None
     created_at: datetime
     called_at: datetime | None
     completed_at: datetime | None
 
+
+# ============================================================================
 # GENERAL HELPERS
+# ============================================================================
+
 def _today_str() -> str:
+    """Return today's date according to India Standard Time."""
     return datetime.now(INDIA_TIMEZONE).strftime("%Y-%m-%d")
+
 
 async def _load_patient_or_404(
     db: AsyncIOMotorDatabase,
     patient_id: str,
 ) -> dict:
     patient = await db.patients.find_one({"_id": patient_id})
+
     if not patient:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Patient not found.",
         )
+
     return patient
+
+
+async def _patient_owner_id(
+    db: AsyncIOMotorDatabase,
+    patient_id: str,
+) -> str | None:
+    patient = await db.patients.find_one(
+        {"_id": patient_id},
+        {"linked_user_id": 1},
+    )
+    return patient.get("linked_user_id") if patient else None
+
 
 def appointment_response(doc: dict) -> AppointmentResponse:
     return AppointmentResponse(
@@ -170,29 +208,6 @@ def appointment_response(doc: dict) -> AppointmentResponse:
         updated_at=doc["updated_at"],
     )
 
-# QUEUE HELPERS
-
-def _queue_sort_key(
-    priority: str,
-    token_number: int,
-) -> tuple[int, int]:
-    """
-    URGENT patients appear before NORMAL patients.
-    Token numbers themselves are never changed.
-    """
-    priority_rank = (
-        0
-        if priority == QueuePriority.URGENT.value
-        else 1
-    )
-    return priority_rank, token_number
-
-def _active_queue_statuses() -> list[str]:
-    return [
-        QueueStatus.WAITING.value,
-        QueueStatus.CALLED.value,
-        QueueStatus.IN_CONSULTATION.value,
-    ]
 
 def queue_response(
     doc: dict,
@@ -207,10 +222,7 @@ def queue_response(
         token_number=doc["token_number"],
         queue_date=doc["queue_date"],
         status=doc["status"],
-        priority=doc.get(
-            "priority",
-            QueuePriority.NORMAL.value,
-        ),
+        priority=doc.get("priority", Priority.NORMAL.value),
         position=position,
         estimated_wait_minutes=estimated_wait_minutes,
         created_at=doc["created_at"],
@@ -218,33 +230,56 @@ def queue_response(
         completed_at=doc.get("completed_at"),
     )
 
-async def create_queue_entry(
+
+# ============================================================================
+# QUEUE CORE
+# ============================================================================
+
+def _queue_sort_key(
+    priority: str,
+    token_number: int,
+) -> tuple[int, int]:
+    """
+    URGENT patients are served before NORMAL patients.
+    Token numbers themselves are never changed.
+    """
+    priority_rank = 0 if priority == Priority.URGENT.value else 1
+    return priority_rank, token_number
+
+
+async def issue_queue_token(
     db: AsyncIOMotorDatabase,
     facility_id: str,
     patient_id: str,
     appointment_id: str | None = None,
-    priority: str = QueuePriority.NORMAL.value,
+    priority: str = Priority.NORMAL.value,
 ) -> dict:
     """
-    Create a queue entry and atomically issue the next token.
-    Token numbering is scoped to:
-        facility + queue date
+    Atomically issue the next queue token for a facility for today.
+
+    This is the single token-generation point for:
+    - appointment check-ins
+    - walk-in patients
     """
     if priority not in {
-        QueuePriority.NORMAL.value,
-        QueuePriority.URGENT.value,
+        Priority.NORMAL.value,
+        Priority.URGENT.value,
     }:
-        priority = QueuePriority.NORMAL.value
+        priority = Priority.NORMAL.value
+
     queue_date = _today_str()
-    counter_id = f"{facility_id}_{queue_date}"
+    counter_key = f"{facility_id}_{queue_date}"
+
     counter = await db.queue_counters.find_one_and_update(
-        {"_id": counter_id},
+        {"_id": counter_key},
         {"$inc": {"last_token": 1}},
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
+
     token_number = counter["last_token"]
     now = datetime.now(timezone.utc)
+
     queue_doc = {
         "_id": str(uuid4()),
         "facility_id": facility_id,
@@ -258,62 +293,59 @@ async def create_queue_entry(
         "called_at": None,
         "completed_at": None,
     }
+
     await db.queue_entries.insert_one(queue_doc)
     return queue_doc
+
 
 async def _calculate_position_and_wait(
     db: AsyncIOMotorDatabase,
     queue_doc: dict,
 ) -> tuple[int, int]:
-    """
-    Calculate:
-        position
-        estimated waiting time
-    based on active patients ahead in the queue.
-    """
-    active_statuses = _active_queue_statuses()
+    """Calculate active queue position and estimated waiting time."""
     current_key = _queue_sort_key(
-        queue_doc.get(
-            "priority",
-            QueuePriority.NORMAL.value,
-        ),
+        queue_doc.get("priority", Priority.NORMAL.value),
         queue_doc["token_number"],
     )
+
     ahead_count = 0
+
     cursor = db.queue_entries.find(
         {
             "facility_id": queue_doc["facility_id"],
             "queue_date": queue_doc["queue_date"],
-            "status": {"$in": active_statuses},
+            "status": {"$in": list(ACTIVE_QUEUE_STATUSES)},
         }
     )
+
     async for entry in cursor:
-        if entry["_id"] == queue_doc["_id"]:
-            continue
         entry_key = _queue_sort_key(
-            entry.get(
-                "priority",
-                QueuePriority.NORMAL.value,
-            ),
+            entry.get("priority", Priority.NORMAL.value),
             entry["token_number"],
         )
-        if entry_key < current_key:
+
+        if (
+            entry["_id"] != queue_doc["_id"]
+            and entry_key < current_key
+        ):
             ahead_count += 1
-    position = ahead_count + 1
+
     facility = await db.facilities.find_one(
         {"_id": queue_doc["facility_id"]},
         {"avg_consult_minutes": 1},
     )
-    average_consult_minutes = DEFAULT_AVG_CONSULT_MINUTES
-    if facility:
-        average_consult_minutes = facility.get(
+
+    average_minutes = (
+        facility.get(
             "avg_consult_minutes",
             DEFAULT_AVG_CONSULT_MINUTES,
         )
-    estimated_wait_minutes = (
-        ahead_count * average_consult_minutes
+        if facility
+        else DEFAULT_AVG_CONSULT_MINUTES
     )
-    return position, estimated_wait_minutes
+
+    return ahead_count + 1, ahead_count * average_minutes
+
 
 async def _transition_queue_status(
     db: AsyncIOMotorDatabase,
@@ -321,58 +353,376 @@ async def _transition_queue_status(
     new_status: QueueStatus,
     timestamp_field: str | None = None,
 ) -> dict:
-    """
-    Apply a validated queue state transition.
-    Prevents invalid transitions such as:
-        COMPLETED → CALLED
-        CANCELLED → IN_CONSULTATION
-        SKIPPED → COMPLETED
-    """
+    """Apply only valid queue state transitions."""
     queue_doc = await db.queue_entries.find_one(
         {"_id": queue_id}
     )
+
     if not queue_doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Queue entry not found.",
         )
-    current_status = QueueStatus(queue_doc["status"])
+
+    try:
+        current_status = QueueStatus(queue_doc["status"])
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Queue entry contains an invalid status.",
+        )
+
     allowed_states = VALID_QUEUE_TRANSITIONS.get(
         current_status,
         set(),
     )
+
     if new_status not in allowed_states:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Invalid queue transition: "
-                f"{current_status.value} → "
-                f"{new_status.value}."
+                f"{current_status.value} → {new_status.value}."
             ),
         )
+
     updates = {
         "status": new_status.value,
     }
+
     if timestamp_field:
         updates[timestamp_field] = datetime.now(timezone.utc)
+
     result = await db.queue_entries.update_one(
         {
             "_id": queue_id,
             "status": current_status.value,
         },
-        {
-            "$set": updates,
-        },
+        {"$set": updates},
     )
+
     if result.modified_count != 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Queue entry changed. Please retry.",
         )
+
     queue_doc.update(updates)
     return queue_doc
 
-# APPOINTMENT: CREATE
+
+# ============================================================================
+# QUEUE: WALK-IN
+# ============================================================================
+
+@router.post(
+    "/queue/walk-in",
+    response_model=QueueEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def check_in_walk_in(
+    payload: WalkInRequest,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Issue a queue token directly for a walk-in patient."""
+    require_staff(current_user)
+
+    if not await db.facilities.find_one(
+        {"_id": payload.facility_id}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Facility not found.",
+        )
+
+    await _load_patient_or_404(
+        db,
+        payload.patient_id,
+    )
+
+    queue_doc = await issue_queue_token(
+        db,
+        facility_id=payload.facility_id,
+        patient_id=payload.patient_id,
+        priority=payload.priority.value,
+    )
+
+    position, wait_minutes = await _calculate_position_and_wait(
+        db,
+        queue_doc,
+    )
+
+    return queue_response(
+        queue_doc,
+        position=position,
+        estimated_wait_minutes=wait_minutes,
+    )
+
+
+# ============================================================================
+# QUEUE: FACILITY VIEW
+# ============================================================================
+
+@router.get(
+    "/queue/facility/{facility_id}",
+    response_model=list[QueueEntryResponse],
+)
+async def get_facility_queue(
+    facility_id: str,
+    status_filter: QueueStatus | None = None,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Return today's queue for the healthcare-worker dashboard."""
+    require_staff(current_user)
+
+    if not await db.facilities.find_one(
+        {"_id": facility_id},
+        {"_id": 1},
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Facility not found.",
+        )
+
+    query = {
+        "facility_id": facility_id,
+        "queue_date": _today_str(),
+    }
+
+    if status_filter:
+        query["status"] = status_filter.value
+
+    entries = [
+        doc async for doc in db.queue_entries.find(query)
+    ]
+
+    entries.sort(
+        key=lambda doc: _queue_sort_key(
+            doc.get("priority", Priority.NORMAL.value),
+            doc["token_number"],
+        )
+    )
+
+    responses = []
+    active_position = 0
+
+    for doc in entries:
+        if doc["status"] in ACTIVE_QUEUE_STATUSES:
+            active_position += 1
+            responses.append(
+                queue_response(
+                    doc,
+                    position=active_position,
+                )
+            )
+        else:
+            responses.append(queue_response(doc))
+
+    return responses
+
+
+# ============================================================================
+# QUEUE: PATIENT VIEW
+# ============================================================================
+
+@router.get(
+    "/queue/{queue_id}",
+    response_model=QueueEntryResponse,
+)
+async def get_queue_entry(
+    queue_id: str,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Return token status, queue position and estimated waiting time."""
+    queue_doc = await db.queue_entries.find_one(
+        {"_id": queue_id}
+    )
+
+    if not queue_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Queue entry not found.",
+        )
+
+    require_self_or_staff(
+        current_user,
+        await _patient_owner_id(
+            db,
+            queue_doc["patient_id"],
+        ),
+    )
+
+    if queue_doc["status"] not in ACTIVE_QUEUE_STATUSES:
+        return queue_response(queue_doc)
+
+    position, wait_minutes = await _calculate_position_and_wait(
+        db,
+        queue_doc,
+    )
+
+    return queue_response(
+        queue_doc,
+        position=position,
+        estimated_wait_minutes=wait_minutes,
+    )
+
+
+# ============================================================================
+# QUEUE: STATE TRANSITIONS
+# ============================================================================
+
+@router.patch(
+    "/queue/{queue_id}/call",
+    response_model=QueueEntryResponse,
+)
+async def call_patient(
+    queue_id: str,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    require_staff(current_user)
+
+    queue_doc = await _transition_queue_status(
+        db,
+        queue_id,
+        QueueStatus.CALLED,
+        "called_at",
+    )
+
+    return queue_response(queue_doc)
+
+
+@router.patch(
+    "/queue/{queue_id}/start",
+    response_model=QueueEntryResponse,
+)
+async def start_consultation(
+    queue_id: str,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    require_staff(current_user)
+
+    queue_doc = await _transition_queue_status(
+        db,
+        queue_id,
+        QueueStatus.IN_CONSULTATION,
+    )
+
+    return queue_response(queue_doc)
+
+
+@router.patch(
+    "/queue/{queue_id}/complete",
+    response_model=QueueEntryResponse,
+)
+async def complete_consultation(
+    queue_id: str,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    require_staff(current_user)
+
+    queue_doc = await _transition_queue_status(
+        db,
+        queue_id,
+        QueueStatus.COMPLETED,
+        "completed_at",
+    )
+
+    # Keep linked appointment status synchronized.
+    appointment_id = queue_doc.get("appointment_id")
+
+    if appointment_id:
+        await db.appointments.update_one(
+            {"_id": appointment_id},
+            {
+                "$set": {
+                    "status": AppointmentStatus.COMPLETED.value,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+    return queue_response(queue_doc)
+
+
+@router.patch(
+    "/queue/{queue_id}/skip",
+    response_model=QueueEntryResponse,
+)
+async def skip_patient(
+    queue_id: str,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    require_staff(current_user)
+
+    queue_doc = await _transition_queue_status(
+        db,
+        queue_id,
+        QueueStatus.SKIPPED,
+    )
+
+    return queue_response(queue_doc)
+
+
+@router.delete(
+    "/queue/{queue_id}",
+    response_model=QueueEntryResponse,
+)
+async def cancel_queue_entry(
+    queue_id: str,
+    current_user: UserDB = Depends(get_current_user_from_cookie),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    queue_doc = await db.queue_entries.find_one(
+        {"_id": queue_id}
+    )
+
+    if not queue_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Queue entry not found.",
+        )
+
+    require_self_or_staff(
+        current_user,
+        await _patient_owner_id(
+            db,
+            queue_doc["patient_id"],
+        ),
+    )
+
+    queue_doc = await _transition_queue_status(
+        db,
+        queue_id,
+        QueueStatus.CANCELLED,
+    )
+
+    appointment_id = queue_doc.get("appointment_id")
+
+    if appointment_id:
+        await db.appointments.update_one(
+            {"_id": appointment_id},
+            {
+                "$set": {
+                    "status": AppointmentStatus.CANCELLED.value,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+    return queue_response(queue_doc)
+
+
+# ============================================================================
+# APPOINTMENTS
+# ============================================================================
+
 @router.post(
     "",
     response_model=AppointmentResponse,
@@ -387,24 +737,28 @@ async def book_appointment(
         db,
         payload.patient_id,
     )
+
     require_self_or_staff(
         current_user,
         patient.get("linked_user_id"),
     )
-    facility = await db.facilities.find_one(
+
+    if not await db.facilities.find_one(
         {"_id": payload.facility_id}
-    )
-    if not facility:
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Facility not found.",
         )
+
     if payload.requested_date < date.today():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Appointment date cannot be in the past.",
         )
+
     now = datetime.now(timezone.utc)
+
     doc = {
         "_id": str(uuid4()),
         "patient_id": payload.patient_id,
@@ -418,10 +772,12 @@ async def book_appointment(
         "created_at": now,
         "updated_at": now,
     }
+
     await db.appointments.insert_one(doc)
+
     return appointment_response(doc)
 
-# APPOINTMENT: LIST
+
 @router.get(
     "",
     response_model=list[AppointmentResponse],
@@ -437,23 +793,32 @@ async def list_appointments(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     query: dict = {}
-    if current_user.role == Roles.PATIENT:
+
+    if current_user.role == UserRole.PATIENT.value:
         own_patient = await db.patients.find_one(
             {"linked_user_id": current_user.id}
         )
+
         if not own_patient:
             return []
+
         query["patient_id"] = own_patient["_id"]
+
     else:
         require_staff(current_user)
+
         if patient_id:
             query["patient_id"] = patient_id
+
         if facility_id:
             query["facility_id"] = facility_id
+
     if status_filter:
         query["status"] = status_filter.value
+
     if requested_date:
         query["requested_date"] = requested_date.isoformat()
+
     cursor = (
         db.appointments
         .find(query)
@@ -466,12 +831,13 @@ async def list_appointments(
         .skip(skip)
         .limit(limit)
     )
+
     return [
         appointment_response(doc)
         async for doc in cursor
     ]
 
-# APPOINTMENT: GET ONE
+
 @router.get(
     "/{appointment_id}",
     response_model=AppointmentResponse,
@@ -484,22 +850,24 @@ async def get_appointment(
     doc = await db.appointments.find_one(
         {"_id": appointment_id}
     )
+
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Appointment not found.",
         )
-    patient = await db.patients.find_one(
-        {"_id": doc["patient_id"]}
-    )
+
     require_self_or_staff(
         current_user,
-        patient.get("linked_user_id") if patient else None,
+        await _patient_owner_id(
+            db,
+            doc["patient_id"],
+        ),
     )
+
     return appointment_response(doc)
 
 
-# APPOINTMENT: CHECK-IN
 @router.post(
     "/{appointment_id}/check-in",
     response_model=QueueEntryResponse,
@@ -510,17 +878,21 @@ async def check_in_appointment(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """
-    Convert today's booked appointment into a queue entry.
+    Convert today's booked appointment into a live queue token.
+    Only facility staff perform physical check-in.
     """
     require_staff(current_user)
+
     appointment = await db.appointments.find_one(
         {"_id": appointment_id}
     )
+
     if not appointment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Appointment not found.",
         )
+
     if appointment["status"] != AppointmentStatus.BOOKED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -529,8 +901,8 @@ async def check_in_appointment(
                 f"{appointment['status']}."
             ),
         )
-    today = _today_str()
-    if appointment["requested_date"] != today:
+
+    if appointment["requested_date"] != _today_str():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -538,8 +910,10 @@ async def check_in_appointment(
                 "can be checked in."
             ),
         )
-    # Prevent the same appointment from being checked in twice.
-    claim_result = await db.appointments.update_one(
+
+    # Claim the appointment first so concurrent check-ins cannot
+    # create multiple queue tokens.
+    claim = await db.appointments.update_one(
         {
             "_id": appointment_id,
             "status": AppointmentStatus.BOOKED.value,
@@ -551,18 +925,21 @@ async def check_in_appointment(
             }
         },
     )
-    if claim_result.modified_count != 1:
+
+    if claim.modified_count != 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Appointment was already checked in.",
         )
+
     try:
-        queue_doc = await create_queue_entry(
+        queue_doc = await issue_queue_token(
             db,
             facility_id=appointment["facility_id"],
             patient_id=appointment["patient_id"],
             appointment_id=appointment_id,
         )
+
         await db.appointments.update_one(
             {"_id": appointment_id},
             {
@@ -572,8 +949,9 @@ async def check_in_appointment(
                 }
             },
         )
+
     except Exception:
-        # Roll back the appointment status if queue creation fails.
+        # Roll back appointment state if queue creation fails.
         await db.appointments.update_one(
             {"_id": appointment_id},
             {
@@ -587,17 +965,19 @@ async def check_in_appointment(
             },
         )
         raise
+
     position, wait_minutes = await _calculate_position_and_wait(
         db,
         queue_doc,
     )
+
     return queue_response(
         queue_doc,
         position=position,
         estimated_wait_minutes=wait_minutes,
     )
 
-# APPOINTMENT: CANCEL
+
 @router.patch(
     "/{appointment_id}/cancel",
     response_model=AppointmentResponse,
@@ -610,18 +990,21 @@ async def cancel_appointment(
     doc = await db.appointments.find_one(
         {"_id": appointment_id}
     )
+
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Appointment not found.",
         )
-    patient = await db.patients.find_one(
-        {"_id": doc["patient_id"]}
-    )
+
     require_self_or_staff(
         current_user,
-        patient.get("linked_user_id") if patient else None,
+        await _patient_owner_id(
+            db,
+            doc["patient_id"],
+        ),
     )
+
     if doc["status"] in {
         AppointmentStatus.COMPLETED.value,
         AppointmentStatus.CANCELLED.value,
@@ -633,21 +1016,25 @@ async def cancel_appointment(
                 f"{doc['status']}."
             ),
         )
+
     updates = {
         "status": AppointmentStatus.CANCELLED.value,
         "updated_at": datetime.now(timezone.utc),
     }
+
     await db.appointments.update_one(
         {"_id": appointment_id},
         {"$set": updates},
     )
-    # If the patient had already checked in, also cancel
-    # their active queue entry.
+
+    # Remove the patient from the active queue if already checked in.
     queue_id = doc.get("queue_id")
+
     if queue_id:
         queue_doc = await db.queue_entries.find_one(
             {"_id": queue_id}
         )
+
         if queue_doc and queue_doc["status"] in {
             QueueStatus.WAITING.value,
             QueueStatus.CALLED.value,
@@ -660,10 +1047,12 @@ async def cancel_appointment(
                     }
                 },
             )
+
     doc.update(updates)
+
     return appointment_response(doc)
 
-# APPOINTMENT: STAFF STATUS UPDATE
+
 @router.patch(
     "/{appointment_id}/status",
     response_model=AppointmentResponse,
@@ -675,295 +1064,37 @@ async def update_appointment_status(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """
-    Staff-only appointment status update.
-    Useful for:
+    Staff-only administrative appointment status update.
+
+    Primarily useful for:
     - NO_SHOW
     - COMPLETED
     - administrative corrections
-    Normal patient flow should use the dedicated appointment
-    and queue endpoints instead.
+
+    Normal queue flow should use the dedicated queue endpoints.
     """
     require_staff(current_user)
+
     doc = await db.appointments.find_one(
         {"_id": appointment_id}
     )
+
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Appointment not found.",
         )
+
     updates = {
         "status": new_status.value,
         "updated_at": datetime.now(timezone.utc),
     }
+
     await db.appointments.update_one(
         {"_id": appointment_id},
         {"$set": updates},
     )
+
     doc.update(updates)
+
     return appointment_response(doc)
-
-# WALK-IN QUEUE
-@router.post(
-    "/queue/walk-in",
-    response_model=QueueEntryResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def check_in_walk_in(
-    payload: WalkInRequest,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    """
-    Create a queue token for a patient without an appointment.
-    """
-    require_staff(current_user)
-    facility = await db.facilities.find_one(
-        {"_id": payload.facility_id}
-    )
-    if not facility:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Facility not found.",
-        )
-    await _load_patient_or_404(
-        db,
-        payload.patient_id,
-    )
-    queue_doc = await create_queue_entry(
-        db,
-        facility_id=payload.facility_id,
-        patient_id=payload.patient_id,
-        priority=payload.priority.value,
-    )
-    position, wait_minutes = await _calculate_position_and_wait(
-        db,
-        queue_doc,
-    )
-    return queue_response(
-        queue_doc,
-        position=position,
-        estimated_wait_minutes=wait_minutes,
-    )
-
-# FACILITY QUEUE
-@router.get(
-    "/queue/facility/{facility_id}",
-    response_model=list[QueueEntryResponse],
-)
-async def get_facility_queue(
-    facility_id: str,
-    status_filter: QueueStatus | None = None,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    """
-    Return today's queue for a facility.
-    """
-    require_staff(current_user)
-    query = {
-        "facility_id": facility_id,
-        "queue_date": _today_str(),
-    }
-    if status_filter:
-        query["status"] = status_filter.value
-    entries = [
-        doc
-        async for doc in db.queue_entries.find(query)
-    ]
-    entries.sort(
-        key=lambda doc: _queue_sort_key(
-            doc.get(
-                "priority",
-                QueuePriority.NORMAL.value,
-            ),
-            doc["token_number"],
-        )
-    )
-    responses = []
-    active_position = 0
-    for doc in entries:
-        if doc["status"] in _active_queue_statuses():
-            active_position += 1
-            responses.append(
-                queue_response(
-                    doc,
-                    position=active_position,
-                )
-            )
-        else:
-            responses.append(
-                queue_response(doc)
-            )
-    return responses
-
-# QUEUE: GET PATIENT ENTRY
-@router.get(
-    "/queue/{queue_id}",
-    response_model=QueueEntryResponse,
-)
-async def get_queue_entry(
-    queue_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    queue_doc = await db.queue_entries.find_one(
-        {"_id": queue_id}
-    )
-    if not queue_doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Queue entry not found.",
-        )
-    patient = await db.patients.find_one(
-        {"_id": queue_doc["patient_id"]}
-    )
-    require_self_or_staff(
-        current_user,
-        patient.get("linked_user_id")
-        if patient
-        else None,
-    )
-    if queue_doc["status"] not in _active_queue_statuses():
-        return queue_response(queue_doc)
-    position, wait_minutes = await _calculate_position_and_wait(
-        db,
-        queue_doc,
-    )
-    return queue_response(
-        queue_doc,
-        position=position,
-        estimated_wait_minutes=wait_minutes,
-    )
-
-# QUEUE: CALL PATIENT
-@router.patch(
-    "/queue/{queue_id}/call",
-    response_model=QueueEntryResponse,
-)
-async def call_patient(
-    queue_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    require_staff(current_user)
-    queue_doc = await _transition_queue_status(
-        db,
-        queue_id,
-        QueueStatus.CALLED,
-        "called_at",
-    )
-    return queue_response(queue_doc)
-
-# QUEUE: START CONSULTATION
-@router.patch(
-    "/queue/{queue_id}/start",
-    response_model=QueueEntryResponse,
-)
-async def start_consultation(
-    queue_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    require_staff(current_user)
-    queue_doc = await _transition_queue_status(
-        db,
-        queue_id,
-        QueueStatus.IN_CONSULTATION,
-    )
-    return queue_response(queue_doc)
-
-# QUEUE: COMPLETE
-@router.patch(
-    "/queue/{queue_id}/complete",
-    response_model=QueueEntryResponse,
-)
-async def complete_consultation(
-    queue_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    require_staff(current_user)
-    queue_doc = await _transition_queue_status(
-        db,
-        queue_id,
-        QueueStatus.COMPLETED,
-        "completed_at",
-    )
-    # Keep the appointment state synchronized.
-    appointment_id = queue_doc.get("appointment_id")
-    if appointment_id:
-        await db.appointments.update_one(
-            {"_id": appointment_id},
-            {
-                "$set": {
-                    "status": AppointmentStatus.COMPLETED.value,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
-    return queue_response(queue_doc)
-
-# QUEUE: SKIP
-@router.patch(
-    "/queue/{queue_id}/skip",
-    response_model=QueueEntryResponse,
-)
-async def skip_patient(
-    queue_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    require_staff(current_user)
-    queue_doc = await _transition_queue_status(
-        db,
-        queue_id,
-        QueueStatus.SKIPPED,
-    )
-    return queue_response(queue_doc)
-
-
-# QUEUE: CANCEL
-@router.delete(
-    "/queue/{queue_id}",
-    response_model=QueueEntryResponse,
-)
-async def cancel_queue_entry(
-    queue_id: str,
-    current_user: UserDB = Depends(get_current_user_from_cookie),
-    db: AsyncIOMotorDatabase = Depends(get_db),
-):
-    queue_doc = await db.queue_entries.find_one(
-        {"_id": queue_id}
-    )
-    if not queue_doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Queue entry not found.",
-        )
-    patient = await db.patients.find_one(
-        {"_id": queue_doc["patient_id"]}
-    )
-    require_self_or_staff(
-        current_user,
-        patient.get("linked_user_id")
-        if patient
-        else None,
-    )
-    queue_doc = await _transition_queue_status(
-        db,
-        queue_id,
-        QueueStatus.CANCELLED,
-    )
-    appointment_id = queue_doc.get("appointment_id")
-    if appointment_id:
-        await db.appointments.update_one(
-            {"_id": appointment_id},
-            {
-                "$set": {
-                    "status": AppointmentStatus.CANCELLED.value,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
-    return queue_response(queue_doc)
