@@ -8,14 +8,18 @@ from db.mongo import get_db
 from .agent import  delete_session_history, get_session_history, workflow_controller
 from api.auth import  get_current_user_from_cookie
 from core.config import settings
-import json 
-import tempfile
-import os
-import requests
-from pydub import AudioSegment
+import json  , httpx , os , tempfile 
 from core.config import settings
+from fastapi.concurrency import run_in_threadpool
+
+import static_ffmpeg
+# Automatically fetches and adds standalone FFmpeg binaries to system PATH
+static_ffmpeg.add_paths()
+from pydub import AudioSegment  # Works natively now!
+
 
 router = APIRouter(prefix="/triage", tags=["Triage & Decision Support"])
+
 
 class TriageRequest(BaseModel):
     transcript: str = Field(..., example="I have severe chest pain and cold sweating")
@@ -25,6 +29,12 @@ class TriageRequest(BaseModel):
 class TriageResponse(BaseModel):
     severity: str = Field(..., description="EMERGENCY , FACILITY_LOOKUP , SYMPTOM_ASSESSMENT")
     content: str
+
+def _convert_audio_sync(raw_path: str, wav_path: str):
+    """Synchronous CPU-heavy audio conversion function."""
+    audio = AudioSegment.from_file(raw_path)
+    audio = audio.set_frame_rate(16000).set_channels(1)
+    audio.export(wav_path, format="wav")
 
 # Start a brand-new distinct chat session
 @router.post("/chat/new")
@@ -58,73 +68,87 @@ async def evaluate_text(
         content= response["message"],  
     )
 
-@router.post("/evaluate-audio-file")
+@router.post("/evaluate-audio-file", response_model=TriageResponse)
 async def evaluate_audio_file(
     file: UploadFile = File(...),
-    chat_id: Optional[str] = Form(default="default") ,
-    current_user: UserDB = Depends(get_current_user_from_cookie)):
+    chat_id: Optional[str] = Form(default="default"),
+    current_user: UserDB = Depends(get_current_user_from_cookie)
+):
     raw_path = None
     wav_path = None
 
     try:
-        # 1. Save incoming browser payload (webm/ogg/any format) to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_raw:
+        ext = os.path.splitext(file.filename)[1] if file.filename else ".webm"
+        if not ext:
+            ext = ".webm"
+
+        # 1. Save upload stream to temporary raw file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_raw:
             content = await file.read()
             temp_raw.write(content)
             raw_path = temp_raw.name
 
-        # 2. Convert raw audio to 16kHz mono WAV format (Required by Sarvam AI)
-        audio = AudioSegment.from_file(raw_path)
-        audio = audio.set_frame_rate(16000).set_channels(1)
-
+        # 2. Prepare temp target WAV file
         wav_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         wav_path = wav_temp.name
         wav_temp.close()
 
-        # Export as standard WAV PCM
-        audio.export(wav_path, format="wav")
+        # 3. Offload blocking pydub conversion to thread pool
+        await run_in_threadpool(_convert_audio_sync, raw_path, wav_path)
 
-        # 3. Call Sarvam AI Speech-to-Text API (Hindi / Indian Languages to English)
+        # 4. Async API request to Sarvam AI
         url = "https://api.sarvam.ai/speech-to-text"
-        headers = {
-            "api-subscription-key": settings.SARVAM_API_KEY
-        }
+        headers = {"api-subscription-key": settings.SARVAM_API_KEY}
         
-        with open(wav_path, "rb") as wav_file:
-            files = {
-                "file": ("recording.wav", wav_file, "audio/wav")
-            }
-            data = {
-                "model": "saarika:v1",  # Or saaras:v1 depending on your model endpoint
-                "language_code": "hi-IN",
-                "with_timestamps": "false"
-            }
-            response = requests.post(url, headers=headers, files=files, data=data)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            with open(wav_path, "rb") as wav_file:
+                files = {"file": ("recording.wav", wav_file, "audio/wav")}
+                data = {
+                    "model": "saaras:v3",
+                    "language_code": "hi-IN",
+                    "with_timestamps": "false"
+                }
+                sarvam_res = await client.post(url, headers=headers, files=files, data=data)
 
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail=f"Sarvam AI Error: {response.text}")
+        if sarvam_res.status_code != 200:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Sarvam AI Error: {sarvam_res.text}"
+            )
 
-        sarvam_data = response.json()
-        transcript = sarvam_data.get("transcript", "")
+        sarvam_data = sarvam_res.json()
+        transcript = sarvam_data.get("transcript", "").strip()
 
-        if not transcript.strip():
-            raise HTTPException(status_code=400, detail="No speech could be recognized in the audio recording.")
+        if not transcript:
+            raise HTTPException(
+                status_code=400, 
+                detail="No speech could be recognized in the audio recording."
+            )
 
-        response = workflow_controller(transcript , current_user.id , chat_id)
+        # 5. Populate workflow response using valid dictionary keys
+        workflow_res = workflow_controller(transcript , current_user.id , chat_id)
 
         return TriageResponse(
-            severity= response["action"],
-            content= response["message"],  
+            severity=workflow_res["action"],
+            content=workflow_res["content"]  # Fixed key matching
         )
 
+    except HTTPException:
+        # Re-raise standard HTTP exceptions so frontend gets proper 4xx/5xx status codes
+        raise
+
+    except Exception as e:
+        # Pass unexpected server errors as HTTP 500
+        raise HTTPException(status_code=500, detail=f"Internal Audio Processing Error: {str(e)}")
+
     finally:
-        # Cleanup temporary audio files
-        for path in [raw_path, wav_path]:
+        # Cleanup temp files
+        for path in (raw_path, wav_path):
             if path and os.path.exists(path):
-                try :
+                try:
                     os.remove(path)
-                except Exception as e :
-                    pass 
+                except OSError:
+                    pass
 
 @router.get("/chat/{chat_id}/history")
 async def get_chat_history(
@@ -148,7 +172,12 @@ async def get_user_chat_ids(
     current_user: UserDB = Depends(get_current_user_from_cookie),
     db: AsyncIOMotorDatabase = Depends(get_db)
 ):
-# 1. Fetch relevant fields chronologically
+    """
+    Returns all previous chat sessions of the currently logged-in user.
+    Uses a MongoDB Aggregation Pipeline to extract ONLY the 1st human question 
+    per distinct chat_id, generating a 5-6 word title for fast UI execution.
+    """
+    # 1. Fetch relevant fields chronologically
     cursor = db["chat_histories"].find(
         {
             "$or": [

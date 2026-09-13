@@ -21,7 +21,7 @@ export const triageService = {
   },
 
   // Evaluate recorded audio file
-  async evaluateAudioFile(audioBlob: Blob, chatId: string): Promise<TriageResponse> {
+    async evaluateAudioFile(audioBlob: Blob, chatId: string): Promise<TriageResponse> {
     const formData = new FormData();
     // Default to recording.webm or recording.wav depending on blob type
     const filename = audioBlob.type.includes('wav') ? 'recording.wav' : 'recording.webm';
