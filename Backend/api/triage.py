@@ -130,7 +130,7 @@ async def evaluate_audio_file(
 
         return TriageResponse(
             severity=workflow_res["action"],
-            content=workflow_res["content"]  # Fixed key matching
+            content=workflow_res["message"]  
         )
 
     except HTTPException:
