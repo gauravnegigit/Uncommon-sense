@@ -1,12 +1,17 @@
 from pydantic import BaseModel , EmailStr , Field
 from typing import List , Optional
 from datetime import datetime 
-
+from enum import Enum
 
 # --- Auth Models --- 
-class UserRole: 
+class UserRole(str, Enum):
     PATIENT = "PATIENT"
+    DOCTOR = "DOCTOR"
+    ASHA_WORKER = "ASHA_WORKER"
 
+class Priority(str, Enum):
+    NORMAL = "NORMAL"
+    URGENT = "URGENT"
 class UserCreate(BaseModel):
     name: str
     email: EmailStr

@@ -11,7 +11,7 @@ from core.security import (
     decode_token, hash_password, verify_password , 
     send_email_otp , send_sms_otp , generate_otp , is_email , is_phone
 )
-from db.models import UserDB
+from db.models import UserDB , UserRole
 from db.mongo import get_db
 import random
 import secrets
@@ -20,9 +20,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
 
 # ---------- Schemas ----------
-
-class UserRole:
-    PATIENT = "PATIENT"
 
 # signup request schema
 class UserCreateRequest(BaseModel):

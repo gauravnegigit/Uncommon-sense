@@ -4,10 +4,10 @@ from fastapi import FastAPI
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from api import (
-    auth,
-    facilities,
-    summary,
-    triage,
+    auth , facilities , summary , triage,
+    appointments , diagnostics , highrisk , medicines ,
+    patient_records , patients , referrals , 
+    fhir , followups
 )
 
 from core.config import settings
@@ -78,6 +78,51 @@ app.include_router(
 
 app.include_router(
     summary.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    appointments.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    diagnostics.router,
+    prefix=settings.API_V1_PREFIX,
+)   
+
+app.include_router(
+    highrisk.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    medicines.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    patient_records.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    patients.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    referrals.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    fhir.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    followups.router,
     prefix=settings.API_V1_PREFIX,
 )
 

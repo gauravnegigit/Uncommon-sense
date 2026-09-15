@@ -15,20 +15,20 @@ load_dotenv()
 pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
 index_name = "my-pinecone-index"
 
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+# embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 index = pc.Index(index_name)
-vector_store = PineconeVectorStore(index=index, embedding=embeddings)
+# vector_store = PineconeVectorStore(index=index, embedding=embeddings)
 
 def setup_hybrid_retriever():
 
     # Dense vector retriever
-    vector_retriever = vector_store.as_retriever(
-            search_type = "similarity" , 
-            search_kwargs = {
-                "k" : 4, 
-            }
-    )
+    # vector_retriever = vector_store.as_retriever(
+    #         search_type = "similarity" , 
+    #         search_kwargs = {
+    #             "k" : 4, 
+    #         }
+    # )
 
     # Sparse retriever
     with open("rag/bm25_retriever.pkl" , "rb") as f:
@@ -36,9 +36,10 @@ def setup_hybrid_retriever():
     bm25_retriever.k = 4
 
     # Ensemble
-    hybrid_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, vector_retriever],
-            weights=[0.3, 0.7]
-        )
+    # hybrid_retriever = EnsembleRetriever(
+    #         retrievers=[bm25_retriever, vector_retriever],
+    #         weights=[0.3, 0.7]
+    #     )
+    hybrid_retriever = bm25_retriever
 
     return hybrid_retriever

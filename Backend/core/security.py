@@ -76,7 +76,7 @@ async def send_email_otp(email: str, otp: str):
         port=587,
         start_tls=True,
         username=settings.SMTP_SERVER_EMAIL,
-        password="ship ckav qygt nrba",
+        password=settings.SMTP_SERVER_PASSWORD,
     )
 
 # Send SMS via Twilio

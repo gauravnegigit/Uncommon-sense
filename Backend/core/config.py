@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     #SMTP SERVER EMAIL
     SMTP_SERVER_EMAIL: str = os.environ.get("SMTP_SERVER_EMAIL")
+    SMTP_SERVER_PASSWORD: str = os.environ.get("SMTP_SERVER_PASSWORD")
 
     # CORS
     CORS_ORIGINS: list[str] = [

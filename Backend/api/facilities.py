@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, field_validator
 
-from api.auth import get_current_user
+from api.auth import get_current_user_from_cookie
 from db.models import UserDB
 from db.mongo import get_db
 
@@ -224,7 +224,7 @@ async def get_facility(
 async def create_facility(
     payload: FacilityCreateRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    current_user: UserDB = Depends(get_current_user),
+    current_user: UserDB = Depends(get_current_user_from_cookie),
 ):
     if current_user.role not in {"DOCTOR", "ASHA_WORKER"}:
         raise HTTPException(
@@ -260,7 +260,7 @@ async def update_capacity(
     facility_id: str,
     payload: FacilityCapacityUpdate,
     db: AsyncIOMotorDatabase = Depends(get_db),
-    current_user: UserDB = Depends(get_current_user),
+    current_user: UserDB = Depends(get_current_user_from_cookie),
 ):
     if current_user.role not in {"DOCTOR", "ASHA_WORKER"}:
         raise HTTPException(
