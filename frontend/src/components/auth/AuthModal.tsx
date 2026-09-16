@@ -19,7 +19,7 @@ export const AuthModal: React.FC = () => {
     resetPassword,
   } = useAuth();
 
-  const { t, isHindi } = useLanguage();
+  const { t, isHindi, tr } = useLanguage();
 
   // Form states
   const [identifier, setIdentifier] = useState('');
@@ -39,6 +39,7 @@ export const AuthModal: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [selectedRole, setSelectedRole] = useState<'PATIENT' | 'ASHA_WORKER' | 'DOCTOR'>('PATIENT');
 
   if (!isAuthModalOpen) return null;
 
@@ -60,7 +61,7 @@ export const AuthModal: React.FC = () => {
       await login({
         identifier: identifier.trim(),
         password,
-        role: 'PATIENT',
+        role: selectedRole,
       });
       setSuccessMsg(t('loginSuccessMsg'));
       setTimeout(() => {
@@ -68,7 +69,21 @@ export const AuthModal: React.FC = () => {
         resetForm();
       }, 700);
     } catch (err: any) {
-      setErrorMsg(err.message || t('invalidUserError'));
+      const msg = String(err.message || '');
+      if (
+        msg.includes('Network Error') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('Failed to fetch') ||
+        msg.includes('500')
+      ) {
+        setErrorMsg(
+          isHindi
+            ? 'बैकएंड सर्वर (http://localhost:8000) से संपर्क नहीं हो पा रहा है। सुनिश्चित करें कि FastAPI सर्वर चालू है। आप ऊपर शीर्ष नेविगेशन बार से सीधे डेमो मोड में तीनों पोर्टल देख सकते हैं।'
+            : 'Cannot connect to backend server at http://localhost:8000. Ensure FastAPI is running. You can also explore all 3 portals directly in Demo mode using the top role switcher.'
+        );
+      } else {
+        setErrorMsg(err.message || t('invalidUserError'));
+      }
     } finally {
       setLoading(false);
     }
@@ -98,12 +113,26 @@ export const AuthModal: React.FC = () => {
         password,
         address: address.trim() || undefined,
         pincode: pincode.trim() || undefined,
-        role: 'PATIENT',
+        role: selectedRole,
       });
       setSuccessMsg(res.message || t('otpSentMsg'));
       setAuthModalMode('OTP');
     } catch (err: any) {
-      setErrorMsg(err.message || t('userExistsError'));
+      const msg = String(err.message || '');
+      if (
+        msg.includes('Network Error') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('Failed to fetch') ||
+        msg.includes('500')
+      ) {
+        setErrorMsg(
+          isHindi
+            ? 'बैकएंड सर्वर से संपर्क नहीं हो पा रहा है। सुनिश्चित करें कि FastAPI सर्वर (पोर्ट 8000) चालू है।'
+            : 'Cannot connect to backend server at http://localhost:8000. Please ensure FastAPI is running.'
+        );
+      } else {
+        setErrorMsg(err.message || t('userExistsError'));
+      }
     } finally {
       setLoading(false);
     }
@@ -210,8 +239,18 @@ export const AuthModal: React.FC = () => {
         {/* Modal Top Header */}
         <div className="flex items-center justify-between pb-2 border-b border-slate-100">
           <div>
-            <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-black uppercase tracking-wide border border-emerald-200">
-              {isHindi ? 'मरीज पोर्टल' : 'Patient Portal'}
+            <span
+              className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide border ${
+                selectedRole === 'PATIENT'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : selectedRole === 'ASHA_WORKER'
+                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+              }`}
+            >
+              {selectedRole === 'PATIENT' && tr('🧑‍🌾 Patient', '🧑‍🌾 मरीज', '🧑‍🌾 रुग्ण व नागरिक')}
+              {selectedRole === 'ASHA_WORKER' && tr('👩‍⚕️ ASHA Worker', '👩‍⚕️ आशा कार्यकर्ता', '👩‍⚕️ आशा स्वयंसेविका')}
+              {selectedRole === 'DOCTOR' && tr('🩺 Medical Officer', '🩺 चिकित्सा अधिकारी (Doctor)', '🩺 वैद्यकीय अधिकारी (Doctor)')}
             </span>
             <h3 className="text-base sm:text-lg font-black text-slate-900 mt-1">
               {authModalMode === 'LOGIN' && t('loginTitle')}
@@ -226,11 +265,60 @@ export const AuthModal: React.FC = () => {
               setIsAuthModalOpen(false);
               resetForm();
             }}
-            className="p-1.5 text-slate-400 hover:text-slate-900 rounded-full hover:bg-slate-100 transition-colors"
+            className="p-1.5 text-slate-400 hover:text-slate-900 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Role Selector for Login & Signup */}
+        {(authModalMode === 'LOGIN' || authModalMode === 'SIGNUP') && (
+          <div className="space-y-1.5 pt-1">
+            <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">
+              {tr('Select Your Role', 'भूमिका चुनें', 'भूमिका निवडा')}
+            </div>
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-slate-100 rounded-2xl border border-slate-200 text-xs font-black">
+              <button
+                type="button"
+                onClick={() => setSelectedRole('PATIENT')}
+                className={`py-1.5 px-2 rounded-xl transition-all flex items-center justify-center gap-1 ${
+                  selectedRole === 'PATIENT'
+                    ? 'bg-emerald-700 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>🧑‍🌾</span>
+                <span className="truncate">{tr('Patient', 'मरीज', 'रुग्ण')}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedRole('ASHA_WORKER')}
+                className={`py-1.5 px-2 rounded-xl transition-all flex items-center justify-center gap-1 ${
+                  selectedRole === 'ASHA_WORKER'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>👩‍⚕️</span>
+                <span className="truncate">{tr('ASHA', 'आशा', 'आशा')}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedRole('DOCTOR')}
+                className={`py-1.5 px-2 rounded-xl transition-all flex items-center justify-center gap-1 ${
+                  selectedRole === 'DOCTOR'
+                    ? 'bg-indigo-700 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>🩺</span>
+                <span className="truncate">{tr('Doctor', 'डॉक्टर', 'डॉक्टर')}</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Error Alert Banner */}
         {errorMsg && (
@@ -515,6 +603,18 @@ export const AuthModal: React.FC = () => {
                       : 'email address'
                   }.`}
             </p>
+
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-[11px] text-amber-900 space-y-1">
+              <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>{isHindi ? 'विकास / स्थानीय परीक्षण सूचना' : 'Local Testing Notice'}</span>
+              </div>
+              <p className="text-[10px] leading-relaxed text-amber-800">
+                {isHindi
+                  ? 'यदि लाइव SMS या ईमेल गेटवे कॉन्फ़िगर नहीं है, तो आपका 6-अंकीय OTP कोड सीधे MongoDB के `rural_health.pending_signups` कलेक्शन में सुरक्षित है।'
+                  : 'If live Twilio SMS or SMTP is unconfigured in your .env, your 6-digit OTP code is stored in local MongoDB `rural_health.pending_signups` collection.'}
+              </p>
+            </div>
 
             {/* Phone SMS OTP Field */}
             {requiresPhoneOtp && (

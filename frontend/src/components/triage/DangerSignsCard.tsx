@@ -13,7 +13,7 @@ export const DangerSignsCard: React.FC<DangerSignsCardProps> = ({
   onOpenDoctorModal,
   onOpenFacilities,
 }) => {
-  const { t, isHindi } = useLanguage();
+  const { t, tr } = useLanguage();
 
   if (!dangerSigns || dangerSigns.length === 0) return null;
 
@@ -26,7 +26,7 @@ export const DangerSignsCard: React.FC<DangerSignsCardProps> = ({
           </span>
           <span className="flex items-center gap-1 text-xs text-red-100 font-bold">
             <AlertTriangle className="w-4 h-4 text-white" />
-            <span>{isHindi ? 'तत्काल हस्तक्षेप आवश्यक' : 'Immediate Intervention Required'}</span>
+            <span>{tr('Immediate Intervention Required', 'तत्काल हस्तक्षेप आवश्यक', 'त्वरित वैद्यकीय हस्तक्षेप आवश्यक')}</span>
           </span>
         </div>
 
@@ -76,7 +76,7 @@ export const DangerSignsCard: React.FC<DangerSignsCardProps> = ({
             className="flex-1 md:flex-none px-4 py-3 rounded-full bg-white/20 hover:bg-white/30 text-white font-bold text-xs sm:text-sm text-center border border-white/20 flex items-center justify-center gap-1.5 transition-all"
           >
             <MapPin className="w-4 h-4" />
-            <span>{isHindi ? 'नजदीकी अस्पताल' : 'Facilities'}</span>
+            <span>{tr('Facilities', 'नजदीकी अस्पताल', 'जवळचे रुग्णालय')}</span>
           </button>
         )}
       </div>
