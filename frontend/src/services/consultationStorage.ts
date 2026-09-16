@@ -1,25 +1,38 @@
 import { ChatSession, TriageMessage } from '../types';
 
-export const getDefaultWelcomeMessage = (isHindi: boolean): TriageMessage => {
+export const getDefaultWelcomeMessage = (lang: string | boolean = 'en'): TriageMessage => {
+  const isMr = lang === 'mr';
+  const isHi = lang === 'hi' || lang === true;
+
+  const content = isMr
+    ? 'नमस्कार! मी ग्रामीण हेल्थ (Gramin Health) ट्रायज सहाय्यक आहे. कृपया रुग्णाची लक्षणे सांगा किंवा खालील माईक बटण दाबून मराठीत बोला.'
+    : isHi
+    ? 'नमस्ते! मैं ग्रामीण हेल्थ (Gramin Health) ट्राइएज सहायक हूँ। कृपया मरीज के लक्षण बताएं या नीचे दिए गए माइक बटन को दबाकर हिंदी में बोलें।'
+    : 'Hello! I am your Gramin Health Triage & Referral Assistant. Please describe patient symptoms or speak using the microphone.';
+
   return {
     id: 'welcome_' + Date.now(),
     sender: 'assistant',
-    content: isHindi
-      ? 'नमस्ते! मैं ग्रामीण हेल्थ (Gramin Health) ट्राइएज सहायक हूँ। कृपया मरीज के लक्षण बताएं या नीचे दिए गए माइक बटन को दबाकर हिंदी में बोलें।'
-      : 'Hello! I am your Gramin Health Triage & Referral Assistant. Please describe patient symptoms or speak using the microphone.',
+    content,
     timestamp: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     severity: 'UNKNOWN',
   };
 };
 
-export const getDefaultSession = (isHindi: boolean = false): ChatSession => {
-  const defaultTitle = isHindi ? 'प्राथमिक स्वास्थ्य परामर्श' : 'Initial Health Consultation';
-  const defaultDate = isHindi ? 'आज' : 'Today';
+export const getDefaultSession = (lang: string | boolean = 'en'): ChatSession => {
+  const isMr = lang === 'mr';
+  const isHi = lang === 'hi' || lang === true;
+  const defaultTitle = isMr
+    ? 'प्राथमिक आरोग्य सल्ला'
+    : isHi
+    ? 'प्राथमिक स्वास्थ्य परामर्श'
+    : 'Initial Health Consultation';
+  const defaultDate = isMr ? 'आज' : isHi ? 'आज' : 'Today';
   return {
     id: 'default_chat',
     title: defaultTitle,
     date: defaultDate,
-    messages: [getDefaultWelcomeMessage(isHindi)],
+    messages: [getDefaultWelcomeMessage(lang)],
   };
 };
 
@@ -61,7 +74,7 @@ export const consultationStorage = {
   getDefaultWelcomeMessage,
   getDefaultSession,
 
-  getSavedSessions(userId?: string, isHindi: boolean = false): ChatSession[] {
+  getSavedSessions(userId?: string, lang: string | boolean = 'en'): ChatSession[] {
     const { storage, key } = getStorageKey(userId);
     try {
       const data = storage.getItem(key);
@@ -74,7 +87,7 @@ export const consultationStorage = {
     } catch (e) {
       console.warn('Error reading saved sessions:', e);
     }
-    return [getDefaultSession(isHindi)];
+    return [getDefaultSession(lang)];
   },
 
   saveSessions(userId: string | undefined, sessions: ChatSession[]): void {
@@ -88,7 +101,7 @@ export const consultationStorage = {
     }
   },
 
-  getActiveChatId(userId?: string, isHindi: boolean = false): string {
+  getActiveChatId(userId?: string, lang: string | boolean = 'en'): string {
     const { storage, activeKey } = getStorageKey(userId);
     try {
       const activeId = storage.getItem(activeKey);
@@ -96,7 +109,7 @@ export const consultationStorage = {
     } catch (e) {
       console.warn('Error reading active chat id:', e);
     }
-    const defaultChat = getDefaultSession(isHindi);
+    const defaultChat = getDefaultSession(lang);
     return defaultChat.id;
   },
 

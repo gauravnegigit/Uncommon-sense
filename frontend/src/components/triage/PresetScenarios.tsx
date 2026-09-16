@@ -8,7 +8,7 @@ interface PresetScenariosProps {
 }
 
 export const PresetScenarios: React.FC<PresetScenariosProps> = ({ onSelectScenario }) => {
-  const { t, isHindi } = useLanguage();
+  const { t, isHindi, isMarathi, tr } = useLanguage();
 
   return (
     <div className="bg-white rounded-3xl border border-slate-200/80 p-5 sm:p-6 shadow-xs space-y-4">
@@ -23,15 +23,16 @@ export const PresetScenarios: React.FC<PresetScenariosProps> = ({ onSelectScenar
           </p>
         </div>
         <span className="hidden sm:inline-flex px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 font-extrabold text-xs border border-emerald-200">
-          5 Scenarios
+          {tr('5 Scenarios', '5 परिदृश्य', '५ नमुना प्रकरणे')}
         </span>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {PRESET_SCENARIOS.map((sc) => {
           const isEm = sc.expected === 'EMERGENCY';
-          const prompt = isHindi ? sc.promptHi : sc.promptEn;
-          const title = isHindi ? sc.titleHi : sc.titleEn;
+          const prompt = isMarathi ? (sc.promptMr || sc.promptHi) : isHindi ? sc.promptHi : sc.promptEn;
+          const title = isMarathi ? (sc.titleMr || sc.titleHi) : isHindi ? sc.titleHi : sc.titleEn;
+          const badge = isMarathi ? (sc.badgeMr || sc.badge) : isHindi ? (sc.badgeHi || sc.badge) : sc.badge;
 
           return (
             <div
@@ -50,7 +51,7 @@ export const PresetScenarios: React.FC<PresetScenariosProps> = ({ onSelectScenar
                       isEm ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-800'
                     }`}
                   >
-                    {sc.badge}
+                    {badge}
                   </span>
                   <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-600 transition-colors" />
                 </div>
