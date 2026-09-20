@@ -1,0 +1,29 @@
+# Existing / core
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+pydantic-settings
+
+# MongoDB
+motor
+pymongo
+
+# Authentication
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+
+# AI / RAG
+google-generativeai
+langchain
+langchain-google-genai
+langchain-community
+
+# External APIs
+requests
+httpx
+
+# Forms / validation
+python-multipart
+email-validator

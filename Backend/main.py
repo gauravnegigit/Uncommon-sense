@@ -1,0 +1,138 @@
+from dotenv import load_dotenv
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
+from api import (
+    auth , facilities , summary , triage,
+    appointments , diagnostics , medicines ,
+    patient_records , patients , referrals , 
+    fhir , followups
+)
+
+from core.config import settings
+
+from db.mongo import (
+    close_mongo_connection,
+    connect_to_mongo,
+)
+
+load_dotenv()
+
+# APPLICATION LIFESPAN
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Startup:
+        Connect to MongoDB and initialize indexes.
+    Shutdown:
+        Close the MongoDB connection.
+    """
+
+    await connect_to_mongo()
+    yield
+    await close_mongo_connection()
+
+# FASTAPI APPLICATION
+app = FastAPI(
+    title=settings.APP_NAME,
+    description=(
+        "Decision-support and referral API for "
+        "rural healthcare. "
+        "This system is not a diagnostic tool and "
+        "does not replace qualified medical judgment."
+    ),
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=[
+        "*"
+    ],
+    allow_headers=[
+        "*"
+    ],
+)
+
+# API ROUTERS
+app.include_router(
+    auth.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    triage.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    facilities.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    summary.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    appointments.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    diagnostics.router,
+    prefix=settings.API_V1_PREFIX,
+)   
+
+app.include_router(
+    medicines.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    patient_records.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    patients.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    referrals.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    fhir.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+app.include_router(
+    followups.router,
+    prefix=settings.API_V1_PREFIX,
+)
+
+
+# HEALTH CHECK
+@app.get(
+    "/health",
+    tags=["system"],
+)
+async def health_check():
+    return {
+        "status": "ok",
+        "app": settings.APP_NAME,
+        "environment": settings.ENV,
+    }
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
